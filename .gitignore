@@ -1,0 +1,21 @@
+# Python Standard
+__pycache__/
+*.py[cod]
+*.class
+.venv/
+env/
+venv/
+
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# PyInstaller / Distribution
+build/
+dist/
+*.spec
+
+# IDEs
+.vscode/
+.idea/
