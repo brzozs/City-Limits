@@ -1,3 +1,10 @@
+<h1 align="center" id="title">City Limits</h1>
+
+<p align="center"><img src="https://socialify.git.ci/brzozs/City-Limits/image?language=1&amp;owner=1&amp;name=1&amp;stargazers=1&amp;theme=Light" alt="project-image"></p>
+
+<p id="description">A top down traffic simulation game powered by real world traffic data!</p>
+
+
 Project Overview:
 
 City Limits is an educational simulation game designed to teach players the principles of effective traffic design and urban planning. Players are challenged to manage increasing traffic demands by implementing real-world intersection designs within a constrained grid. By selecting specific global cities, players experience localized traffic patterns driven by real-world data, observing how "rush hour" peaks and troughs impact their infrastructure choices. The goal is to optimize flow and achieve a target efficiency score to progress through increasingly complex urban layouts.
@@ -12,7 +19,6 @@ Level 3: 3x3 grid, 4 travel points (includes access to larger more advanced inte
 Infrastructure Toolkit: Players can pick from many different types of intersections ranging from everyday ones to more unseen.
 
 
-
 Scoring: Players must hit a target “flow rate” which is found using this equation
 
 Flow Rate = (VAvg/Vlimit)X(TIdeal/TActual)x(1-TIdle/TActual)
@@ -20,6 +26,7 @@ Tech Stack:
 
 Python
 (More to come I’m not exactly sure yet exactly what I will need, but python is the main language)
+
 Timeline:
 Middle of February:
 	Complete the core 2D grid system (starting with the 3x1 layout).
