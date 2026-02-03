@@ -1,21 +1,53 @@
 # Python Standard
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 *.class
+*.so
+*.egg
+*.egg-info/
 .venv/
 env/
 venv/
+ENV/
+.Python
+
+# Pygame specific
+*.swp
+*.swo
 
 # macOS System Files
 .DS_Store
 .AppleDouble
 .LSOverride
+._*
+.Spotlight-V100
+.Trashes
 
 # PyInstaller / Distribution
 build/
 dist/
 *.spec
+*.app
+*.exe
 
 # IDEs
 .vscode/
 .idea/
+*.sublime-*
+.spyproject/
+
+# Environment variables / Secrets
+.env
+.env.local
+*.key
+config.ini
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
