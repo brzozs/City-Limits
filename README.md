@@ -21,7 +21,9 @@ Infrastructure Toolkit: Players can pick from many different types of intersecti
 
 Scoring: Players must hit a target “flow rate” which is found using this equation
 
-Flow Rate = (VAvg/Vlimit)X(TIdeal/TActual)x(1-TIdle/TActual)
+$$Flow\ Rate = \left(\frac{V_{Avg}}{V_{limit}}\right) \times \left(\frac{T_{Ideal}}{T_{Actual}}\right) \times \left(1 - \frac{T_{Idle}}{T_{Actual}}\right)$$
+
+<br>
 Tech Stack:
 
 Python
