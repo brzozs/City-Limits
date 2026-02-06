@@ -1,5 +1,6 @@
 import pygame
 import sys
+from intersection import Intersection
 
 # Initialize pygame
 #(runs the game) python src/main.py
@@ -28,7 +29,20 @@ def main():
     # Button setup
     button_rect = pygame.Rect(300, 20, 200, 50)
     font = pygame.font.Font(None, 36)
-    
+
+    # Create a simple placeholder sprite for intersections
+    placeholder_sprite = pygame.Surface((40, 40), pygame.SRCALPHA)
+    pygame.draw.circle(placeholder_sprite, (255, 100, 100), (20, 20), 20)
+    pygame.draw.circle(placeholder_sprite, (255, 255, 255), (20, 20), 20, 2)
+
+    # Create some intersection placeholders at the bottom
+    intersections = [
+        Intersection(100, 500, placeholder_sprite),
+        Intersection(200, 500, placeholder_sprite),
+        Intersection(300, 500, placeholder_sprite),
+    ]
+    dragging_intersection = None
+
     # Game loop
     running = True
     while running:
@@ -41,7 +55,28 @@ def main():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if button_hovered:
                     current_grid_index = (current_grid_index + 1) % len(grid_configs)
-        
+                else:
+                    # Check if clicking on an intersection
+                    for intersection in intersections:
+                        if intersection.is_clicked(mouse_pos):
+                            intersection.dragging = True
+                            dragging_intersection = intersection
+                            break
+            if event.type == pygame.MOUSEBUTTONUP:
+                # Release the dragged intersection
+                if dragging_intersection:
+                    rows, cols = grid_configs[current_grid_index]
+                    grid_width = cols * CELL_SIZE
+                    start_x = (WINDOW_WIDTH - grid_width) // 2
+                    start_y = 120
+                    dragging_intersection.snap_to_grid(start_x, start_y, CELL_SIZE, rows, cols)
+                    dragging_intersection.dragging = False
+                    dragging_intersection = None
+
+        # Update dragging position
+        if dragging_intersection:
+            dragging_intersection.update_position(mouse_pos)
+
         # Clear screen
         screen.fill(BACKGROUND_COLOR)
         
@@ -65,7 +100,11 @@ def main():
                 y = start_y + row * CELL_SIZE
                 pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
                 pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
-        
+
+        # Draw intersections
+        for intersection in intersections:
+            intersection.draw(screen)
+
         # Update display
         pygame.display.flip()
     
