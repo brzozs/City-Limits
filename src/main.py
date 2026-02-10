@@ -17,18 +17,66 @@ BUTTON_COLOR = (70, 130, 180)
 BUTTON_HOVER_COLOR = (100, 160, 210)
 BUTTON_TEXT_COLOR = (255, 255, 255)
 
-def main():
-    # Create window
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("City Limits - Level 1")
-    
+# Game states
+STATE_MENU = "menu"
+STATE_GAME = "game"
+
+def draw_menu(screen, font, title_font):
+    """Draw the main menu with city selection"""
+    screen.fill(BACKGROUND_COLOR)
+
+    # Title
+    title = title_font.render("City Limits", True, (255, 255, 255))
+    title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 100))
+    screen.blit(title, title_rect)
+
+    # City buttons
+    button_width = 300
+    button_height = 60
+    button_spacing = 80
+    start_y = 250
+
+    buttons = []
+    mouse_pos = pygame.mouse.get_pos()
+
+    for i in range(3):
+        button_y = start_y + i * button_spacing
+        button_rect = pygame.Rect(
+            (WINDOW_WIDTH - button_width) // 2,
+            button_y,
+            button_width,
+            button_height
+        )
+
+        # Check hover
+        is_hovered = button_rect.collidepoint(mouse_pos)
+        button_color = BUTTON_HOVER_COLOR if is_hovered else BUTTON_COLOR
+
+        # Draw button
+        pygame.draw.rect(screen, button_color, button_rect, border_radius=10)
+
+        # Draw text
+        button_text = font.render(f"Placeholder {i + 1}", True, BUTTON_TEXT_COLOR)
+        text_rect = button_text.get_rect(center=button_rect.center)
+        screen.blit(button_text, text_rect)
+
+        buttons.append(button_rect)
+
+    return buttons
+
+def run_game(screen, selected_city):
+    """Run the game for the selected city"""
+    pygame.display.set_caption(f"City Limits - {selected_city}")
+
     # Grid configurations: (rows, cols)
     grid_configs = [(1, 3), (2, 3), (3, 3)]
     current_grid_index = 0
     
     # Button setup
-    button_rect = pygame.Rect(300, 20, 200, 50)
+    back_button_rect = pygame.Rect(20, 20, 150, 40)
+    level_button_rect = pygame.Rect(300, 20, 200, 50)
     font = pygame.font.Font(None, 36)
+    small_font = pygame.font.Font(None, 28)
 
     # Create a simple placeholder sprite for intersections
     placeholder_sprite = pygame.Surface((40, 40), pygame.SRCALPHA)
@@ -47,13 +95,16 @@ def main():
     running = True
     while running:
         mouse_pos = pygame.mouse.get_pos()
-        button_hovered = button_rect.collidepoint(mouse_pos)
-        
+        back_button_hovered = back_button_rect.collidepoint(mouse_pos)
+        level_button_hovered = level_button_rect.collidepoint(mouse_pos)
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                return False  # Exit entire game
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if button_hovered:
+                if back_button_hovered:
+                    return True  # Return to menu
+                elif level_button_hovered:
                     current_grid_index = (current_grid_index + 1) % len(grid_configs)
                 else:
                     # Check if clicking on an intersection
@@ -79,12 +130,19 @@ def main():
 
         # Clear screen
         screen.fill(BACKGROUND_COLOR)
-        
-        # Draw button
-        button_color = BUTTON_HOVER_COLOR if button_hovered else BUTTON_COLOR
-        pygame.draw.rect(screen, button_color, button_rect, border_radius=10)
+
+        # Draw back button
+        back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
+        pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=10)
+        back_text = small_font.render("Back", True, BUTTON_TEXT_COLOR)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        screen.blit(back_text, back_text_rect)
+
+        # Draw level button
+        level_button_color = BUTTON_HOVER_COLOR if level_button_hovered else BUTTON_COLOR
+        pygame.draw.rect(screen, level_button_color, level_button_rect, border_radius=10)
         button_text = font.render("Level", True, BUTTON_TEXT_COLOR)
-        text_rect = button_text.get_rect(center=button_rect.center)
+        text_rect = button_text.get_rect(center=level_button_rect.center)
         screen.blit(button_text, text_rect)
         
         # Draw grid
@@ -107,7 +165,48 @@ def main():
 
         # Update display
         pygame.display.flip()
-    
+
+    return True  # Return to menu
+
+def main():
+    """Main function managing game states"""
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    pygame.display.set_caption("City Limits")
+
+    font = pygame.font.Font(None, 36)
+    title_font = pygame.font.Font(None, 72)
+
+    current_state = STATE_MENU
+    selected_city = None
+
+    running = True
+    while running:
+        if current_state == STATE_MENU:
+            # Draw menu and get button rects
+            city_buttons = draw_menu(screen, font, title_font)
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    mouse_pos = pygame.mouse.get_pos()
+                    # Check which city button was clicked
+                    for i, button in enumerate(city_buttons):
+                        if button.collidepoint(mouse_pos):
+                            selected_city = f"Placeholder {i + 1}"
+                            current_state = STATE_GAME
+                            break
+
+            pygame.display.flip()
+
+        elif current_state == STATE_GAME:
+            # Run game, returns True if should return to menu, False if should quit
+            should_continue = run_game(screen, selected_city)
+            if should_continue:
+                current_state = STATE_MENU
+            else:
+                running = False
+
     pygame.quit()
     sys.exit()
 
