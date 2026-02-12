@@ -21,6 +21,9 @@ BUTTON_TEXT_COLOR = (255, 255, 255)
 STATE_MENU = "menu"
 STATE_GAME = "game"
 
+# City names
+CITY_NAMES = ["New York City", "Los Angeles", "Chicago"]
+
 def draw_menu(screen, font, title_font):
     """Draw the main menu with city selection"""
     screen.fill(BACKGROUND_COLOR)
@@ -36,7 +39,6 @@ def draw_menu(screen, font, title_font):
     button_spacing = 80
     start_y = 250
 
-    city_names = ["New York City", "Los Angeles", "Chicago"]
     buttons = []
     mouse_pos = pygame.mouse.get_pos()
 
@@ -57,7 +59,7 @@ def draw_menu(screen, font, title_font):
         pygame.draw.rect(screen, button_color, button_rect, border_radius=10)
 
         # Draw text
-        button_text = font.render(city_names[i], True, BUTTON_TEXT_COLOR)
+        button_text = font.render(CITY_NAMES[i], True, BUTTON_TEXT_COLOR)
         text_rect = button_text.get_rect(center=button_rect.center)
         screen.blit(button_text, text_rect)
 
@@ -177,7 +179,6 @@ def main():
     font = pygame.font.Font(None, 36)
     title_font = pygame.font.Font(None, 72)
 
-    city_names = ["New York City", "Los Angeles", "Chicago"]
     current_state = STATE_MENU
     selected_city = None
 
@@ -195,7 +196,7 @@ def main():
                     # Check which city button was clicked
                     for i, button in enumerate(city_buttons):
                         if button.collidepoint(mouse_pos):
-                            selected_city = city_names[i]
+                            selected_city = CITY_NAMES[i]
                             current_state = STATE_GAME
                             break
 
