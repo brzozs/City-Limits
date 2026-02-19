@@ -269,9 +269,9 @@ def run_game(screen, selected_city, selected_level):
     current_grid = grid_configs[selected_level]
     rows, cols = current_grid
 
-    # Compute grid screen position (used throughout this function)
+    # Compute grid screen position — always centered on screen
     grid_start_x = (WINDOW_WIDTH - cols * CELL_SIZE) // 2
-    grid_start_y = 120
+    grid_start_y = (WINDOW_HEIGHT - rows * CELL_SIZE) // 2
 
     # Generate spawn/end markers once for this level
     spawn_markers = generate_spawn_points(
@@ -289,11 +289,14 @@ def run_game(screen, selected_city, selected_level):
     pygame.draw.circle(placeholder_sprite, (255, 100, 100), (20, 20), 20)
     pygame.draw.circle(placeholder_sprite, (255, 255, 255), (20, 20), 20, 2)
 
-    # Create some intersection placeholders at the bottom
+    # Create some intersection placeholders — fixed at bottom center of screen
+    num_placeholders = 3
+    tray_y = WINDOW_HEIGHT - 35
+    tray_spacing = 80
+    tray_start_x = (WINDOW_WIDTH - (num_placeholders - 1) * tray_spacing) // 2
     intersections = [
-        Intersection(100, 500, placeholder_sprite),
-        Intersection(200, 500, placeholder_sprite),
-        Intersection(300, 500, placeholder_sprite),
+        Intersection(tray_start_x + i * tray_spacing, tray_y, placeholder_sprite)
+        for i in range(num_placeholders)
     ]
     dragging_intersection = None
 
