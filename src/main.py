@@ -2,6 +2,7 @@ import pygame
 import sys
 import random
 from intersection import Intersection
+from car import Car
 
 # Initialize pygame
 #(runs the game) python src/main.py
@@ -104,17 +105,62 @@ def generate_spawn_points(level, rows, cols, start_x, start_y, cell_size):
     random.shuffle(chosen)
 
     markers = []
+    end_counter = 1
     for i, idx in enumerate(chosen):
         side, index = perimeter[idx]
         px, py = edge_pixel(side, index, start_x, start_y, cell_size, rows, cols)
-        markers.append({
-            'type': 'start' if i < num_starts else 'end',
+        is_start = i < num_starts
+        m = {
+            'type': 'start' if is_start else 'end',
             'side': side,
             'index': index,
             'x': px,
             'y': py,
-        })
+        }
+        if not is_start:
+            m['number'] = end_counter
+            end_counter += 1
+        markers.append(m)
     return markers
+
+
+def _marker_circle_pos(m):
+    """Return the screen position of a marker's circle (outside the grid)."""
+    x, y, side = m['x'], m['y'], m['side']
+    if side == 'top':    return (x, y - MARKER_OFFSET)
+    if side == 'bottom': return (x, y + MARKER_OFFSET)
+    if side == 'left':   return (x - MARKER_OFFSET, y)
+    return (x + MARKER_OFFSET, y)  # right
+
+
+def build_car_path(start_m, end_m, grid_start_x, grid_start_y, rows, cols):
+    """Return a list of (x, y) waypoints from a start marker to an end marker.
+
+    Routes L-shaped through the grid along cell midlines.
+    """
+    sm = _marker_circle_pos(start_m)
+    em = _marker_circle_pos(end_m)
+
+    sx, sy = start_m['x'], start_m['y']  # entry point on grid boundary
+    ex, ey = end_m['x'],   end_m['y']    # exit point on grid boundary
+
+    s_vert = start_m['side'] in ('top', 'bottom')
+    e_vert = end_m['side']   in ('top', 'bottom')
+
+    if s_vert and not e_vert:
+        # Enter vertically, exit horizontally — one turn
+        return [sm, (sx, sy), (sx, ey), (ex, ey), em]
+    elif not s_vert and e_vert:
+        # Enter horizontally, exit vertically — one turn
+        return [sm, (sx, sy), (ex, sy), (ex, ey), em]
+    elif s_vert and e_vert:
+        # Both vertical — cross the grid horizontally at its mid-row
+        mid_y = grid_start_y + (rows * CELL_SIZE) // 2
+        return [sm, (sx, sy), (sx, mid_y), (ex, mid_y), (ex, ey), em]
+    else:
+        # Both horizontal — cross the grid vertically at its mid-column
+        mid_x = grid_start_x + (cols * CELL_SIZE) // 2
+        return [sm, (sx, sy), (mid_x, sy), (mid_x, ey), (ex, ey), em]
 
 
 def draw_spawn_markers(screen, markers, font):
@@ -124,7 +170,7 @@ def draw_spawn_markers(screen, markers, font):
         side = m['side']
         is_start = m['type'] == 'start'
         color = START_COLOR if is_start else END_COLOR
-        label = 'S' if is_start else 'E'
+        label = 'S' if is_start else str(m['number'])
 
         # Offset the circle centre outside the grid
         if side == 'top':
@@ -277,6 +323,8 @@ def run_game(screen, selected_city, selected_level):
     spawn_markers = generate_spawn_points(
         selected_level, rows, cols, grid_start_x, grid_start_y, CELL_SIZE
     )
+    starts = [m for m in spawn_markers if m['type'] == 'start']
+    ends   = [m for m in spawn_markers if m['type'] == 'end']
 
     # Button setup
     back_button_rect = pygame.Rect(20, 20, 150, 40)
@@ -284,12 +332,12 @@ def run_game(screen, selected_city, selected_level):
     small_font = pygame.font.Font(None, 28)
     marker_font = pygame.font.Font(None, 24)
 
-    # Create a simple placeholder sprite for intersections
+    # simple placeholder sprite for intersections
     placeholder_sprite = pygame.Surface((40, 40), pygame.SRCALPHA)
     pygame.draw.circle(placeholder_sprite, (255, 100, 100), (20, 20), 20)
     pygame.draw.circle(placeholder_sprite, (255, 255, 255), (20, 20), 20, 2)
 
-    # Create some intersection placeholders — fixed at bottom center of screen
+    #  intersection placeholders
     num_placeholders = 3
     tray_y = WINDOW_HEIGHT - 35
     tray_spacing = 80
@@ -300,11 +348,30 @@ def run_game(screen, selected_city, selected_level):
     ]
     dragging_intersection = None
 
+    # Car spawn system
+    cars = []
+    clock = pygame.time.Clock()
+    SPAWN_INTERVAL = 3.0          # seconds between spawn waves
+    spawn_timer = SPAWN_INTERVAL  # trigger a spawn on the first frame
+
     # Game loop
     running = True
     while running:
+        dt = clock.tick(60) / 1000.0
         mouse_pos = pygame.mouse.get_pos()
         back_button_hovered = back_button_rect.collidepoint(mouse_pos)
+
+        # Spawn a new wave of cars when the timer fires
+        spawn_timer += dt
+        if spawn_timer >= SPAWN_INTERVAL and ends:
+            spawn_timer = 0.0
+            for start_m in starts:
+                end_m = random.choice(ends)
+                path = build_car_path(start_m, end_m, grid_start_x, grid_start_y, rows, cols)
+                cars.append(Car(path))
+
+        # Remove cars that have reached their destination
+        cars = [c for c in cars if not c.done]
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -330,6 +397,10 @@ def run_game(screen, selected_city, selected_level):
         if dragging_intersection:
             dragging_intersection.update_position(mouse_pos)
 
+        # Update all cars
+        for car in cars:
+            car.update(dt)
+
         # Clear screen
         screen.fill(BACKGROUND_COLOR)
 
@@ -350,6 +421,10 @@ def run_game(screen, selected_city, selected_level):
 
         # Draw spawn/end markers
         draw_spawn_markers(screen, spawn_markers, marker_font)
+
+        # Draw cars
+        for car in cars:
+            car.draw(screen)
 
         # Draw intersections
         for intersection in intersections:
