@@ -2,6 +2,7 @@ import pygame
 import sys
 import random
 from intersection import Intersection
+from grid_network import IntersectionNetwork
 from car import Car
 
 # Initialize pygame
@@ -131,6 +132,20 @@ def _marker_circle_pos(m):
     if side == 'bottom': return (x, y + MARKER_OFFSET)
     if side == 'left':   return (x - MARKER_OFFSET, y)
     return (x + MARKER_OFFSET, y)  # right
+
+
+def _find_nearest_intersection(network, x, y):
+    """Find the nearest intersection to pixel coordinates (x, y)."""
+    nearest = None
+    min_dist = float('inf')
+    
+    for intersection in network.get_all_intersections():
+        dist = ((intersection.x - x) ** 2 + (intersection.y - y) ** 2) ** 0.5
+        if dist < min_dist:
+            min_dist = dist
+            nearest = intersection
+    
+    return nearest
 
 
 def build_car_path(start_m, end_m, grid_start_x, grid_start_y, rows, cols):
@@ -319,6 +334,9 @@ def run_game(screen, selected_city, selected_level):
     grid_start_x = (WINDOW_WIDTH - cols * CELL_SIZE) // 2
     grid_start_y = (WINDOW_HEIGHT - rows * CELL_SIZE) // 2
 
+    # Create the intersection network
+    network = IntersectionNetwork(rows, cols, grid_start_x, grid_start_y, CELL_SIZE)
+
     # Generate spawn/end markers once for this level
     spawn_markers = generate_spawn_points(
         selected_level, rows, cols, grid_start_x, grid_start_y, CELL_SIZE
@@ -332,19 +350,16 @@ def run_game(screen, selected_city, selected_level):
     small_font = pygame.font.Font(None, 28)
     marker_font = pygame.font.Font(None, 24)
 
-    # simple placeholder sprite for intersections
-    placeholder_sprite = pygame.Surface((40, 40), pygame.SRCALPHA)
-    pygame.draw.circle(placeholder_sprite, (255, 100, 100), (20, 20), 20)
-    pygame.draw.circle(placeholder_sprite, (255, 255, 255), (20, 20), 20, 2)
-
-    #  intersection placeholders
-    num_placeholders = 3
-    tray_y = WINDOW_HEIGHT - 35
-    tray_spacing = 80
-    tray_start_x = (WINDOW_WIDTH - (num_placeholders - 1) * tray_spacing) // 2
-    intersections = [
-        Intersection(tray_start_x + i * tray_spacing, tray_y, placeholder_sprite)
-        for i in range(num_placeholders)
+    # Draggable intersection tray at bottom
+    num_tray_intersections = 5
+    tray_y = WINDOW_HEIGHT - 40
+    tray_spacing = 70
+    tray_start_x = (WINDOW_WIDTH - (num_tray_intersections - 1) * tray_spacing) // 2
+    
+    # Create draggable intersections in the tray (None, None means not placed yet)
+    draggable_intersections = [
+        Intersection(None, None, tray_start_x + i * tray_spacing, tray_y)
+        for i in range(num_tray_intersections)
     ]
     dragging_intersection = None
 
@@ -367,8 +382,19 @@ def run_game(screen, selected_city, selected_level):
             spawn_timer = 0.0
             for start_m in starts:
                 end_m = random.choice(ends)
-                path = build_car_path(start_m, end_m, grid_start_x, grid_start_y, rows, cols)
-                cars.append(Car(path))
+                
+                # Only spawn cars if there's a valid path through intersections
+                if network.get_all_intersections():
+                    start_int = _find_nearest_intersection(network, start_m['x'], start_m['y'])
+                    end_int = _find_nearest_intersection(network, end_m['x'], end_m['y'])
+                    
+                    if start_int and end_int:
+                        # Find path through intersection network
+                        intersection_path = network.find_path(start_int, end_int)
+                        if intersection_path:
+                            # Convert to pixel coordinates (only intersections, no markers outside grid)
+                            pixel_path = network.intersections_to_pixels(intersection_path)
+                            cars.append(Car(pixel_path))
 
         # Remove cars that have reached their destination
         cars = [c for c in cars if not c.done]
@@ -380,8 +406,8 @@ def run_game(screen, selected_city, selected_level):
                 if back_button_hovered:
                     return True  # Return to level select
                 else:
-                    # Check if clicking on an intersection
-                    for intersection in intersections:
+                    # Check if clicking on a draggable intersection
+                    for intersection in draggable_intersections:
                         if intersection.is_clicked(mouse_pos):
                             intersection.dragging = True
                             dragging_intersection = intersection
@@ -389,7 +415,10 @@ def run_game(screen, selected_city, selected_level):
             if event.type == pygame.MOUSEBUTTONUP:
                 # Release the dragged intersection
                 if dragging_intersection:
-                    dragging_intersection.snap_to_grid(grid_start_x, grid_start_y, CELL_SIZE, rows, cols)
+                    # Try to snap to grid
+                    if dragging_intersection.snap_to_grid(grid_start_x, grid_start_y, CELL_SIZE, rows, cols):
+                        # Add to network
+                        network.add_intersection(dragging_intersection)
                     dragging_intersection.dragging = False
                     dragging_intersection = None
 
@@ -419,6 +448,9 @@ def run_game(screen, selected_city, selected_level):
                 pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
                 pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
 
+        # Draw placed intersections (from the network)
+        network.draw(screen)
+
         # Draw spawn/end markers
         draw_spawn_markers(screen, spawn_markers, marker_font)
 
@@ -426,9 +458,11 @@ def run_game(screen, selected_city, selected_level):
         for car in cars:
             car.draw(screen)
 
-        # Draw intersections
-        for intersection in intersections:
-            intersection.draw(screen)
+        # Draw draggable intersections in tray
+        for intersection in draggable_intersections:
+            # Only draw if not already placed on grid
+            if not intersection.snapped:
+                intersection.draw(screen)
 
         # Update display
         pygame.display.flip()
