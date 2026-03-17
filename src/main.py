@@ -30,6 +30,7 @@ MARKER_OFFSET = 22  # pixels outside the grid edge
 STATE_MENU = "menu"
 STATE_LEVEL_SELECT = "level_select"
 STATE_GAME = "game"
+GAME_DAY_LENGTH = 300.0  # 5 minutes for a full 24-hour cycle
 
 def get_perimeter_positions(rows, cols):
     """Return all grid-edge positions in clockwise order as (side, index) tuples.
@@ -176,6 +177,27 @@ def build_car_path(start_m, end_m, grid_start_x, grid_start_y, rows, cols):
         # Both horizontal — cross the grid vertically at its mid-column
         mid_x = grid_start_x + (cols * CELL_SIZE) // 2
         return [sm, (sx, sy), (mid_x, sy), (mid_x, ey), (ex, ey), em]
+
+
+def draw_clock(screen, elapsed_seconds, font):
+    """Draw the game clock at the top center of the screen.
+    
+    Cycles through a 24-hour day (midnight to midnight).
+    """
+    # Calculate time within a 24-hour cycle
+    time_in_cycle = elapsed_seconds % GAME_DAY_LENGTH
+    
+    # Convert to hours and minutes (map cycle time to 0-24 hours)
+    hours = int((time_in_cycle / GAME_DAY_LENGTH) * 24)
+    minutes = int(((time_in_cycle / GAME_DAY_LENGTH) * 24 - hours) * 60)
+    
+    # Format as HH:MM
+    time_str = f"{hours:02d}:{minutes:02d}"
+    
+    # Render text
+    clock_text = font.render(time_str, True, (255, 255, 255))
+    text_rect = clock_text.get_rect(center=(WINDOW_WIDTH // 2, 20))
+    screen.blit(clock_text, text_rect)
 
 
 def draw_spawn_markers(screen, markers, font):
@@ -368,11 +390,15 @@ def run_game(screen, selected_city, selected_level):
     clock = pygame.time.Clock()
     SPAWN_INTERVAL = 3.0          # seconds between spawn waves
     spawn_timer = SPAWN_INTERVAL  # trigger a spawn on the first frame
+    
+    # Clock system
+    game_timer = 0.0  # elapsed seconds
 
     # Game loop
     running = True
     while running:
         dt = clock.tick(60) / 1000.0
+        game_timer += dt
         mouse_pos = pygame.mouse.get_pos()
         back_button_hovered = back_button_rect.collidepoint(mouse_pos)
 
@@ -432,6 +458,9 @@ def run_game(screen, selected_city, selected_level):
 
         # Clear screen
         screen.fill(BACKGROUND_COLOR)
+
+        # Draw clock at top
+        draw_clock(screen, game_timer, font)
 
         # Draw back button
         back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
