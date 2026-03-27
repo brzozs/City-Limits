@@ -586,9 +586,12 @@ def run_game(screen, selected_city, selected_level):
             pygame.display.flip()
             continue
 
-        # Spawn a new wave of cars when the timer fires
+        # Spawn a new wave of cars when the timer fires.
+        # Interval is derived from real traffic volume at the current game hour:
+        # peak hours (rush hour) → short interval; overnight → long interval.
+        current_spawn_interval = get_spawn_interval(selected_city, game_timer, GAME_DAY_LENGTH)
         spawn_timer += dt if (is_started and not is_paused) else 0
-        if spawn_timer >= 3.0 and ends and is_started:
+        if spawn_timer >= current_spawn_interval and ends and is_started:
             spawn_timer = 0.0
             for start_m in starts:
                 end_m = random.choice(ends)
@@ -664,9 +667,12 @@ def run_game(screen, selected_city, selected_level):
         # Draw clock at top
         draw_clock(screen, game_timer, font)
 
-        # Draw flow rate score (bottom-right corner)
+        # Draw flow rate score and live traffic volume (bottom-right corner)
         fr_text = small_font.render(f"Flow Rate: {flow_rate:.2f}", True, (255, 255, 255))
         screen.blit(fr_text, fr_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 10)))
+        vol = get_current_volume(selected_city, game_timer, GAME_DAY_LENGTH)
+        vol_text = small_font.render(f"Traffic: {vol} vph", True, (200, 200, 200))
+        screen.blit(vol_text, vol_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 30)))
 
         # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
