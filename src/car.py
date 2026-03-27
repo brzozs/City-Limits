@@ -30,12 +30,27 @@ class Car:
         self.color = random.choice(CAR_COLORS)
         self.angle = 0.0                 # degrees, 0 = right
 
+        # Scoring metrics
+        self.travel_time = 0.0           # total seconds this car has been alive
+        self.idle_time = 0.0             # seconds spent stationary (speed = 0)
+        self.path_length = self._calc_path_length()  # total pixel distance
+
+    def _calc_path_length(self):
+        total = 0.0
+        for i in range(len(self.path) - 1):
+            dx = self.path[i + 1][0] - self.path[i][0]
+            dy = self.path[i + 1][1] - self.path[i][1]
+            total += math.hypot(dx, dy)
+        return total
+
     def update(self, dt):
         if self.done:
             return
         if self.path_index >= len(self.path):
             self.done = True
             return
+
+        self.travel_time += dt
 
         tx, ty = self.path[self.path_index]
         dx = tx - self.x
@@ -52,6 +67,10 @@ class Car:
         else:
             self.x += move * dx / dist
             self.y += move * dy / dist
+
+        # Track idle time (car is blocked if it hasn't moved enough)
+        if move == 0 or dist == 0:
+            self.idle_time += dt
 
     def draw(self, screen):
         surf = pygame.Surface((CAR_W, CAR_H), pygame.SRCALPHA)

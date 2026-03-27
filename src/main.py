@@ -3,7 +3,8 @@ import sys
 import random
 from intersection import Intersection
 from grid_network import IntersectionNetwork
-from car import Car
+from car import Car, CAR_SPEED
+from traffic_data import get_spawn_interval, get_current_volume
 
 # Initialize pygame
 #(runs the game) python src/main.py
@@ -31,6 +32,33 @@ STATE_MENU = "menu"
 STATE_LEVEL_SELECT = "level_select"
 STATE_GAME = "game"
 GAME_DAY_LENGTH = 300.0  # 5 minutes for a full 24-hour cycle
+
+def calculate_flow_rate(completed_stats):
+    """Compute flow rate using the equation from the README:
+
+    Flow Rate = (V_Avg / V_limit) x (T_Ideal / T_Actual) x (1 - T_Idle / T_Actual)
+
+    completed_stats is a list of (path_length, travel_time, idle_time) tuples
+    for every car that has reached its destination.
+    """
+    if not completed_stats:
+        return 0.0
+
+    total_dist   = sum(pl for pl, _, _  in completed_stats)
+    total_actual = sum(tt for _,  tt, _ in completed_stats)
+    total_idle   = sum(it for _,  _,  it in completed_stats)
+
+    if total_actual == 0:
+        return 0.0
+
+    v_avg    = total_dist / total_actual          # average speed (px/s)
+    v_ratio  = min(v_avg / CAR_SPEED, 1.0)        # V_Avg / V_limit
+    t_ideal  = total_dist / CAR_SPEED             # ideal travel time at speed limit
+    t_ratio  = min(t_ideal / total_actual, 1.0)   # T_Ideal / T_Actual
+    idle_ratio = 1.0 - (total_idle / total_actual) # 1 - T_Idle / T_Actual
+
+    return v_ratio * t_ratio * idle_ratio
+
 
 def get_perimeter_positions(rows, cols):
     """Return all grid-edge positions in clockwise order as (side, index) tuples.
@@ -461,9 +489,12 @@ def run_game(screen, selected_city, selected_level):
     # Car spawn system
     cars = []
     clock = pygame.time.Clock()
-    SPAWN_INTERVAL = 3.0          # seconds between spawn waves
-    spawn_timer = SPAWN_INTERVAL  # trigger a spawn on the first frame
-    
+    spawn_timer = 0.0
+
+    # Scoring
+    completed_stats = []   # (path_length, travel_time, idle_time) per finished car
+    flow_rate = 0.0
+
     # Clock system
     game_timer = 0.0  # elapsed seconds
     
@@ -557,7 +588,7 @@ def run_game(screen, selected_city, selected_level):
 
         # Spawn a new wave of cars when the timer fires
         spawn_timer += dt if (is_started and not is_paused) else 0
-        if spawn_timer >= SPAWN_INTERVAL and ends and is_started:
+        if spawn_timer >= 3.0 and ends and is_started:
             spawn_timer = 0.0
             for start_m in starts:
                 end_m = random.choice(ends)
@@ -575,8 +606,14 @@ def run_game(screen, selected_city, selected_level):
                             pixel_path = network.intersections_to_pixels(intersection_path)
                             cars.append(Car(pixel_path))
 
-        # Remove cars that have reached their destination
+        # Collect stats from finished cars then remove them
+        for car in cars:
+            if car.done:
+                completed_stats.append((car.path_length, car.travel_time, car.idle_time))
         cars = [c for c in cars if not c.done]
+
+        # Recalculate flow rate whenever a car finishes
+        flow_rate = calculate_flow_rate(completed_stats)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -626,7 +663,11 @@ def run_game(screen, selected_city, selected_level):
 
         # Draw clock at top
         draw_clock(screen, game_timer, font)
-        
+
+        # Draw flow rate score (bottom-right corner)
+        fr_text = small_font.render(f"Flow Rate: {flow_rate:.2f}", True, (255, 255, 255))
+        screen.blit(fr_text, fr_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 10)))
+
         # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
         
