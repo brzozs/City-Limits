@@ -94,9 +94,9 @@ GLOBAL_MAX_VOLUME = max(v for city in TRAFFIC_DATA.values() for v in city)  # 34
 # Per-level spawn interval ranges (min_seconds, max_seconds).
 # Level 1 is forgiving; Level 3 is intense.
 LEVEL_INTERVALS = {
-    1: (3.0, 15.0),
-    2: (2.0, 10.0),
-    3: (1.0,  8.0),
+    1: (2.0, 10.0),
+    2: (1.5,  8.0),
+    3: (1.0,  7.0),
 }
 
 # Per-city difficulty multiplier applied to the spawn interval.

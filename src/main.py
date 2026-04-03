@@ -164,14 +164,6 @@ def generate_spawn_points(level, rows, cols, start_x, start_y, cell_size):
     return markers
 
 
-def _marker_circle_pos(m):
-    """Return the screen position of a marker's circle (outside the grid)."""
-    x, y, side = m['x'], m['y'], m['side']
-    if side == 'top':    return (x, y - MARKER_OFFSET)
-    if side == 'bottom': return (x, y + MARKER_OFFSET)
-    if side == 'left':   return (x - MARKER_OFFSET, y)
-    return (x + MARKER_OFFSET, y)  # right
-
 
 def _find_nearest_intersection(network, x, y):
     """Find the nearest intersection to pixel coordinates (x, y)."""
@@ -186,35 +178,6 @@ def _find_nearest_intersection(network, x, y):
     
     return nearest
 
-
-def build_car_path(start_m, end_m, grid_start_x, grid_start_y, rows, cols):
-    """Return a list of (x, y) waypoints from a start marker to an end marker.
-
-    Routes L-shaped through the grid along cell midlines.
-    """
-    sm = _marker_circle_pos(start_m)
-    em = _marker_circle_pos(end_m)
-
-    sx, sy = start_m['x'], start_m['y']  # entry point on grid boundary
-    ex, ey = end_m['x'],   end_m['y']    # exit point on grid boundary
-
-    s_vert = start_m['side'] in ('top', 'bottom')
-    e_vert = end_m['side']   in ('top', 'bottom')
-
-    if s_vert and not e_vert:
-        # Enter vertically, exit horizontally — one turn
-        return [sm, (sx, sy), (sx, ey), (ex, ey), em]
-    elif not s_vert and e_vert:
-        # Enter horizontally, exit vertically — one turn
-        return [sm, (sx, sy), (ex, sy), (ex, ey), em]
-    elif s_vert and e_vert:
-        # Both vertical — cross the grid horizontally at its mid-row
-        mid_y = grid_start_y + (rows * CELL_SIZE) // 2
-        return [sm, (sx, sy), (sx, mid_y), (ex, mid_y), (ex, ey), em]
-    else:
-        # Both horizontal — cross the grid vertically at its mid-column
-        mid_x = grid_start_x + (cols * CELL_SIZE) // 2
-        return [sm, (sx, sy), (mid_x, sy), (mid_x, ey), (ex, ey), em]
 
 
 def draw_clock(screen, elapsed_seconds, font):
@@ -506,6 +469,8 @@ def run_game(screen, selected_city, selected_level):
     flow_rate = 0.0
     spawn_attempts = 0     # how many cars the network tried to route
     spawn_successes = 0    # how many cars actually found a valid path
+    _stats_len = 0         # cached length of completed_stats for change detection
+    _prev_attempts = 0     # cached spawn_attempts for change detection
 
     # Visual feedback state for score change indicator
     prev_flow_rate = 0.0
@@ -513,8 +478,8 @@ def run_game(screen, selected_city, selected_level):
     delta_alpha = 0.0      # 0–255; fades to 0 over ~2 seconds
     delta_y_offset = 0.0   # floats upward as it fades
 
-    # Clock system
-    game_timer = 0.0  # elapsed seconds
+    # Clock system — start at 07:00 so morning rush begins immediately
+    game_timer = GAME_DAY_LENGTH * 7 / 24
     
     # Pause/Start system
     is_started = False
@@ -635,14 +600,17 @@ def run_game(screen, selected_city, selected_level):
                 completed_stats.append((car.path_length, car.travel_time, car.idle_time))
         cars = [c for c in cars if not c.done]
 
-        # Recalculate flow rate and detect changes for the delta indicator
-        new_flow_rate = calculate_flow_rate(completed_stats, spawn_attempts, spawn_successes)
-        if abs(new_flow_rate - prev_flow_rate) > 0.001:
-            score_delta = new_flow_rate - prev_flow_rate
-            delta_alpha = 255.0
-            delta_y_offset = 0.0
-            prev_flow_rate = new_flow_rate
-        flow_rate = new_flow_rate
+        # Recalculate flow rate only when the underlying data has changed
+        if len(completed_stats) != _stats_len or spawn_attempts != _prev_attempts:
+            new_flow_rate = calculate_flow_rate(completed_stats, spawn_attempts, spawn_successes)
+            _stats_len = len(completed_stats)
+            _prev_attempts = spawn_attempts
+            if abs(new_flow_rate - prev_flow_rate) > 0.001:
+                score_delta = new_flow_rate - prev_flow_rate
+                delta_alpha = 255.0
+                delta_y_offset = 0.0
+                prev_flow_rate = new_flow_rate
+            flow_rate = new_flow_rate
 
         # Advance delta animation
         if delta_alpha > 0:
