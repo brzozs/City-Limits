@@ -507,6 +507,12 @@ def run_game(screen, selected_city, selected_level):
     spawn_attempts = 0     # how many cars the network tried to route
     spawn_successes = 0    # how many cars actually found a valid path
 
+    # Visual feedback state for score change indicator
+    prev_flow_rate = 0.0
+    score_delta = 0.0
+    delta_alpha = 0.0      # 0–255; fades to 0 over ~2 seconds
+    delta_y_offset = 0.0   # floats upward as it fades
+
     # Clock system
     game_timer = 0.0  # elapsed seconds
     
@@ -629,8 +635,19 @@ def run_game(screen, selected_city, selected_level):
                 completed_stats.append((car.path_length, car.travel_time, car.idle_time))
         cars = [c for c in cars if not c.done]
 
-        # Recalculate flow rate whenever a car finishes
-        flow_rate = calculate_flow_rate(completed_stats, spawn_attempts, spawn_successes)
+        # Recalculate flow rate and detect changes for the delta indicator
+        new_flow_rate = calculate_flow_rate(completed_stats, spawn_attempts, spawn_successes)
+        if abs(new_flow_rate - prev_flow_rate) > 0.001:
+            score_delta = new_flow_rate - prev_flow_rate
+            delta_alpha = 255.0
+            delta_y_offset = 0.0
+            prev_flow_rate = new_flow_rate
+        flow_rate = new_flow_rate
+
+        # Advance delta animation
+        if delta_alpha > 0:
+            delta_alpha = max(0.0, delta_alpha - 127.5 * dt)  # fades over ~2 s
+            delta_y_offset -= 25.0 * dt                       # floats upward
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -683,12 +700,42 @@ def run_game(screen, selected_city, selected_level):
         # Draw clock at top
         draw_clock(screen, game_timer, font)
 
-        # Draw flow rate score and live traffic volume (bottom-right corner)
-        fr_text = small_font.render(f"Flow Rate: {flow_rate:.2f}", True, (255, 255, 255))
-        screen.blit(fr_text, fr_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 10)))
+        # --- Score panel (bottom-right) ---
+        # Colour reflects performance: green = good, yellow = mid, red = poor
+        if flow_rate >= 0.75:
+            fr_color = (80, 220, 80)
+        elif flow_rate >= 0.45:
+            fr_color = (255, 210, 50)
+        else:
+            fr_color = (255, 80, 80)
+
+        # Progress bar
+        bar_w, bar_h = 130, 8
+        bar_x = WINDOW_WIDTH - 10 - bar_w
+        bar_y = WINDOW_HEIGHT - 14
+        pygame.draw.rect(screen, (60, 60, 60), (bar_x, bar_y, bar_w, bar_h), border_radius=4)
+        fill_w = int(bar_w * min(flow_rate, 1.0))
+        if fill_w > 0:
+            pygame.draw.rect(screen, fr_color, (bar_x, bar_y, fill_w, bar_h), border_radius=4)
+
+        # Flow rate text
+        fr_text = small_font.render(f"Flow Rate: {flow_rate:.2f}", True, fr_color)
+        screen.blit(fr_text, fr_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 25)))
+
+        # Traffic volume
         vol = get_current_volume(selected_city, game_timer, GAME_DAY_LENGTH)
         vol_text = small_font.render(f"Traffic: {vol} vph", True, (200, 200, 200))
-        screen.blit(vol_text, vol_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 30)))
+        screen.blit(vol_text, vol_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 45)))
+
+        # Floating delta indicator (fades and rises after each score change)
+        if delta_alpha > 0:
+            sign = "+" if score_delta > 0 else ""
+            delta_color = (80, 220, 80) if score_delta > 0 else (255, 80, 80)
+            delta_surf = small_font.render(f"{sign}{score_delta:.2f}", True, delta_color)
+            delta_surf.set_alpha(int(delta_alpha))
+            base_y = WINDOW_HEIGHT - 25
+            screen.blit(delta_surf, delta_surf.get_rect(
+                bottomright=(WINDOW_WIDTH - 10, int(base_y + delta_y_offset))))
 
         # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
