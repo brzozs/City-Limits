@@ -91,25 +91,60 @@ TRAFFIC_DATA = {
 # Global max volume across all cities — used for consistent scaling
 GLOBAL_MAX_VOLUME = max(v for city in TRAFFIC_DATA.values() for v in city)  # 3456
 
+# Per-level spawn interval ranges (min_seconds, max_seconds).
+# Level 1 is forgiving; Level 3 is intense.
+LEVEL_INTERVALS = {
+    1: (3.0, 15.0),
+    2: (2.0, 10.0),
+    3: (1.0,  8.0),
+}
 
-def get_spawn_interval(city, game_timer, game_day_length):
+# Per-city difficulty multiplier applied to the spawn interval.
+# Values < 1.0 shorten the interval (more cars = harder).
+CITY_DIFFICULTY = {
+    "New York City": 1.00,
+    "Los Angeles":   0.85,   # heaviest traffic — hardest
+    "Chicago":       1.20,   # lightest traffic — easiest
+}
+
+
+def get_spawn_interval(city, game_timer, game_day_length, level=2):
     """Return spawn interval (seconds) based on real traffic volume at the current game hour.
 
     More traffic → shorter interval (more cars). Scaled so the game stays playable.
+    Difficulty varies by level (spawn rate range) and city (multiplier).
+    Traffic volume is linearly interpolated between hours for smooth transitions.
     """
-    game_hour = int((game_timer % game_day_length) / game_day_length * 24) % 24
+    if game_day_length <= 0:
+        return LEVEL_INTERVALS.get(level, (2.0, 10.0))[1]
+
+    # Fractional 24-hour clock position (e.g. 7.5 = 07:30)
+    time_frac = (game_timer % game_day_length) / game_day_length * 24
+    hour = int(time_frac) % 24
+    next_hour = (hour + 1) % 24
+    frac = time_frac - int(time_frac)  # 0.0–1.0 within the current hour
+
     city_data = TRAFFIC_DATA.get(city, TRAFFIC_DATA["New York City"])
-    volume = city_data[game_hour]
+    volume = city_data[hour] * (1.0 - frac) + city_data[next_hour] * frac
 
-    MIN_INTERVAL = 1.5   # seconds at peak traffic
-    MAX_INTERVAL = 10.0  # seconds at minimum traffic
+    min_interval, max_interval = LEVEL_INTERVALS.get(level, (2.0, 10.0))
+    normalized = min(volume / GLOBAL_MAX_VOLUME, 1.0)
+    base_interval = max_interval - normalized * (max_interval - min_interval)
 
-    normalized = volume / GLOBAL_MAX_VOLUME  # 0.0 – 1.0
-    return MAX_INTERVAL - normalized * (MAX_INTERVAL - MIN_INTERVAL)
+    city_mult = CITY_DIFFICULTY.get(city, 1.0)
+    return max(0.5, base_interval * city_mult)
 
 
 def get_current_volume(city, game_timer, game_day_length):
-    """Return the traffic volume (vph) for the current game hour."""
-    game_hour = int((game_timer % game_day_length) / game_day_length * 24) % 24
+    """Return the traffic volume (vph) for the current game moment.
+
+    Linearly interpolated between hours so the displayed value changes smoothly.
+    """
+    if game_day_length <= 0:
+        return 0
+    time_frac = (game_timer % game_day_length) / game_day_length * 24
+    hour = int(time_frac) % 24
+    next_hour = (hour + 1) % 24
+    frac = time_frac - int(time_frac)
     city_data = TRAFFIC_DATA.get(city, TRAFFIC_DATA["New York City"])
-    return city_data[game_hour]
+    return int(city_data[hour] * (1.0 - frac) + city_data[next_hour] * frac)

@@ -33,13 +33,16 @@ STATE_LEVEL_SELECT = "level_select"
 STATE_GAME = "game"
 GAME_DAY_LENGTH = 300.0  # 5 minutes for a full 24-hour cycle
 
-def calculate_flow_rate(completed_stats):
+def calculate_flow_rate(completed_stats, spawn_attempts=0, spawn_successes=0):
     """Compute flow rate using the equation from the README:
 
     Flow Rate = (V_Avg / V_limit) x (T_Ideal / T_Actual) x (1 - T_Idle / T_Actual)
 
     completed_stats is a list of (path_length, travel_time, idle_time) tuples
     for every car that has reached its destination.
+
+    spawn_attempts / spawn_successes are used to penalise incomplete networks:
+    cars that cannot be routed drag the score down proportionally.
     """
     if not completed_stats:
         return 0.0
@@ -57,7 +60,14 @@ def calculate_flow_rate(completed_stats):
     t_ratio  = min(t_ideal / total_actual, 1.0)   # T_Ideal / T_Actual
     idle_ratio = 1.0 - (total_idle / total_actual) # 1 - T_Idle / T_Actual
 
-    return v_ratio * t_ratio * idle_ratio
+    base_rate = v_ratio * t_ratio * idle_ratio
+
+    # Penalise missed routings — an incomplete network lowers the score
+    if spawn_attempts > 0:
+        routing_ratio = spawn_successes / spawn_attempts
+        return base_rate * routing_ratio
+
+    return base_rate
 
 
 def get_perimeter_positions(rows, cols):
@@ -494,6 +504,8 @@ def run_game(screen, selected_city, selected_level):
     # Scoring
     completed_stats = []   # (path_length, travel_time, idle_time) per finished car
     flow_rate = 0.0
+    spawn_attempts = 0     # how many cars the network tried to route
+    spawn_successes = 0    # how many cars actually found a valid path
 
     # Clock system
     game_timer = 0.0  # elapsed seconds
@@ -589,25 +601,27 @@ def run_game(screen, selected_city, selected_level):
         # Spawn a new wave of cars when the timer fires.
         # Interval is derived from real traffic volume at the current game hour:
         # peak hours (rush hour) → short interval; overnight → long interval.
-        current_spawn_interval = get_spawn_interval(selected_city, game_timer, GAME_DAY_LENGTH)
+        current_spawn_interval = get_spawn_interval(selected_city, game_timer, GAME_DAY_LENGTH, selected_level)
         spawn_timer += dt if (is_started and not is_paused) else 0
         if spawn_timer >= current_spawn_interval and ends and is_started:
             spawn_timer = 0.0
             for start_m in starts:
                 end_m = random.choice(ends)
-                
-                # Only spawn cars if there's a valid path through intersections
+
+                # Only count attempts once the player has placed intersections
                 if network.get_all_intersections():
+                    spawn_attempts += 1
                     start_int = _find_nearest_intersection(network, start_m['x'], start_m['y'])
                     end_int = _find_nearest_intersection(network, end_m['x'], end_m['y'])
-                    
+
                     if start_int and end_int:
                         # Find path through intersection network
                         intersection_path = network.find_path(start_int, end_int)
                         if intersection_path:
-                            # Convert to pixel coordinates (only intersections, no markers outside grid)
+                            # Convert to pixel coordinates
                             pixel_path = network.intersections_to_pixels(intersection_path)
                             cars.append(Car(pixel_path))
+                            spawn_successes += 1
 
         # Collect stats from finished cars then remove them
         for car in cars:
@@ -616,7 +630,7 @@ def run_game(screen, selected_city, selected_level):
         cars = [c for c in cars if not c.done]
 
         # Recalculate flow rate whenever a car finishes
-        flow_rate = calculate_flow_rate(completed_stats)
+        flow_rate = calculate_flow_rate(completed_stats, spawn_attempts, spawn_successes)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -627,6 +641,8 @@ def run_game(screen, selected_city, selected_level):
                 elif start_button_hovered:
                     is_started = not is_started
                     is_paused = False  # Unpause when starting
+                    if is_started:
+                        spawn_timer = 0.0  # always wait a full interval before first spawn
                 elif pause_button_hovered:
                     if is_started:
                         if is_paused:
