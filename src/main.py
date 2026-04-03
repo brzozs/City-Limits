@@ -527,7 +527,7 @@ def run_game(screen, selected_city, selected_level):
     # Game loop
     running = True
     while running:
-        dt = clock.tick(60) / 1000.0
+        dt = min(clock.tick(60) / 1000.0, 0.1)  # cap at 100 ms to prevent lag-spike glitches
         
         # Only increment timer if game is started and not paused
         if is_started and not is_paused:
@@ -658,8 +658,7 @@ def run_game(screen, selected_city, selected_level):
                 elif start_button_hovered:
                     is_started = not is_started
                     is_paused = False  # Unpause when starting
-                    if is_started:
-                        spawn_timer = 0.0  # always wait a full interval before first spawn
+                    spawn_timer = 0.0  # reset on both start and stop
                 elif pause_button_hovered:
                     if is_started:
                         if is_paused:
