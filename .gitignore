@@ -42,7 +42,16 @@ dist/
 .env
 .env.local
 *.key
+*.pem
+*.p12
+*.secret
+secrets/
 config.ini
+
+# Word / Office documents (contain author metadata)
+*.docx
+*.xlsx
+*.pptx
 
 # Logs
 *.log
