@@ -182,23 +182,30 @@ def _find_nearest_intersection(network, x, y):
 
 def draw_clock(screen, elapsed_seconds, font):
     """Draw the game clock at the top center of the screen.
-    
+
     Cycles through a 24-hour day (midnight to midnight).
+    Clock colour reflects the time of day:
+      - Rush hours (07-09, 16-19): amber — high traffic expected
+      - Overnight (00-05): dim gray — quiet period
+      - All other hours: white
+    Returns the current game hour so callers can branch on it.
     """
-    # Calculate time within a 24-hour cycle
     time_in_cycle = elapsed_seconds % GAME_DAY_LENGTH
-    
-    # Convert to hours and minutes (map cycle time to 0-24 hours)
     hours = int((time_in_cycle / GAME_DAY_LENGTH) * 24)
     minutes = int(((time_in_cycle / GAME_DAY_LENGTH) * 24 - hours) * 60)
-    
-    # Format as HH:MM
     time_str = f"{hours:02d}:{minutes:02d}"
-    
-    # Render text
-    clock_text = font.render(time_str, True, (255, 255, 255))
+
+    if (7 <= hours < 10) or (16 <= hours < 19):
+        clock_color = (255, 165, 40)   # amber — rush hour
+    elif hours < 5:
+        clock_color = (140, 140, 140)  # dim gray — overnight
+    else:
+        clock_color = (255, 255, 255)  # white — normal hours
+
+    clock_text = font.render(time_str, True, clock_color)
     text_rect = clock_text.get_rect(center=(WINDOW_WIDTH // 2, 20))
     screen.blit(clock_text, text_rect)
+    return hours
 
 
 def draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos):
@@ -521,7 +528,10 @@ def run_game(screen, selected_city, selected_level):
             screen.fill(BACKGROUND_COLOR)
             mouse_pos = pygame.mouse.get_pos()
             back_button_hovered_temp = back_button_rect.collidepoint(mouse_pos)
-            draw_clock(screen, game_timer, font)
+            _qc_hour = draw_clock(screen, game_timer, font)
+            if (7 <= _qc_hour < 10) or (16 <= _qc_hour < 19):
+                rh_s = small_font.render("RUSH HOUR", True, (255, 165, 40))
+                screen.blit(rh_s, rh_s.get_rect(center=(WINDOW_WIDTH // 2, 38)))
             draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
             
             # Draw resume and quit buttons when paused
@@ -664,8 +674,13 @@ def run_game(screen, selected_city, selected_level):
         # Clear screen
         screen.fill(BACKGROUND_COLOR)
 
-        # Draw clock at top
-        draw_clock(screen, game_timer, font)
+        # Draw clock at top; returns current game hour for rush-hour indicator
+        game_hour = draw_clock(screen, game_timer, font)
+
+        # Rush hour indicator — shown just below the clock during peak periods
+        if (7 <= game_hour < 10) or (16 <= game_hour < 19):
+            rh_surf = small_font.render("RUSH HOUR", True, (255, 165, 40))
+            screen.blit(rh_surf, rh_surf.get_rect(center=(WINDOW_WIDTH // 2, 38)))
 
         # --- Score panel (bottom-right) ---
         # Colour reflects performance: green = good, yellow = mid, red = poor
@@ -694,9 +709,13 @@ def run_game(screen, selected_city, selected_level):
         vol_text = small_font.render(f"Traffic: {vol} vph", True, (200, 200, 200))
         screen.blit(vol_text, vol_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 45)))
 
+        # Active car count
+        active_text = small_font.render(f"Active: {len(cars)}", True, (200, 200, 200))
+        screen.blit(active_text, active_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 65)))
+
         # Completed cars count
         done_text = small_font.render(f"Delivered: {len(completed_stats)}", True, (200, 200, 200))
-        screen.blit(done_text, done_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 65)))
+        screen.blit(done_text, done_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 85)))
 
         # City difficulty label
         _diff_labels = {"New York City": ("Normal", (200, 200, 200)),
@@ -704,7 +723,7 @@ def run_game(screen, selected_city, selected_level):
                         "Chicago":       ("Easy",   (80, 210, 120))}
         diff_label, diff_color = _diff_labels.get(selected_city, ("Normal", (200, 200, 200)))
         diff_text = small_font.render(f"Difficulty: {diff_label}", True, diff_color)
-        screen.blit(diff_text, diff_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 85)))
+        screen.blit(diff_text, diff_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 105)))
 
         # Floating delta indicator (fades and rises after each score change)
         if delta_alpha > 0:
