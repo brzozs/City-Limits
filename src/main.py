@@ -694,6 +694,18 @@ def run_game(screen, selected_city, selected_level):
         vol_text = small_font.render(f"Traffic: {vol} vph", True, (200, 200, 200))
         screen.blit(vol_text, vol_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 45)))
 
+        # Completed cars count
+        done_text = small_font.render(f"Delivered: {len(completed_stats)}", True, (200, 200, 200))
+        screen.blit(done_text, done_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 65)))
+
+        # City difficulty label
+        _diff_labels = {"New York City": ("Normal", (200, 200, 200)),
+                        "Los Angeles":   ("Hard",   (255, 100, 80)),
+                        "Chicago":       ("Easy",   (80, 210, 120))}
+        diff_label, diff_color = _diff_labels.get(selected_city, ("Normal", (200, 200, 200)))
+        diff_text = small_font.render(f"Difficulty: {diff_label}", True, diff_color)
+        screen.blit(diff_text, diff_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 85)))
+
         # Floating delta indicator (fades and rises after each score change)
         if delta_alpha > 0:
             sign = "+" if score_delta > 0 else ""
