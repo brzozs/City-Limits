@@ -656,8 +656,8 @@ def run_game(screen, selected_city, selected_level):
         if dragging_intersection:
             dragging_intersection.update_position(mouse_pos)
 
-        # Update all cars if not paused
-        if not is_paused:
+        # Update all cars only while the simulation is running
+        if is_started and not is_paused:
             for car in cars:
                 car.update(dt)
 
