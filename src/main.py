@@ -1,7 +1,7 @@
 import pygame
 import sys
 import random
-from intersection import Intersection
+from intersection import Intersection, IntersectionType
 from grid_network import IntersectionNetwork
 from car import Car, CAR_SPEED
 from traffic_data import get_spawn_interval, get_current_volume
@@ -68,6 +68,15 @@ def calculate_flow_rate(completed_stats, spawn_attempts=0, spawn_successes=0):
         return base_rate * routing_ratio
 
     return base_rate
+
+
+def get_grade(flow_rate):
+    """Convert a 0–1 flow rate to a letter grade."""
+    if flow_rate >= 0.80: return 'A'
+    if flow_rate >= 0.65: return 'B'
+    if flow_rate >= 0.45: return 'C'
+    if flow_rate >= 0.25: return 'D'
+    return 'F'
 
 
 def get_perimeter_positions(rows, cols):
@@ -413,6 +422,85 @@ def draw_level_menu(screen, font, title_font, selected_city):
 
     return buttons, back_button_rect
 
+
+def draw_palette(screen, palette_types, palette_start_x, palette_y,
+                 slot_w, slot_h, small_font, mouse_pos):
+    """Draw the intersection type palette strip at the bottom of the screen."""
+    for i, itype in enumerate(palette_types):
+        sx = palette_start_x + i * slot_w
+        rect = pygame.Rect(sx, palette_y, slot_w, slot_h)
+
+        bg = (70, 70, 70) if rect.collidepoint(mouse_pos) else (50, 50, 50)
+        pygame.draw.rect(screen, bg, rect)
+        pygame.draw.rect(screen, (90, 90, 90), rect, 1)
+
+        preview = Intersection(None, None, sx + slot_w // 2, palette_y + 28,
+                               intersection_type=itype)
+        preview.draw(screen)
+
+        label = small_font.render(itype.value, True, (180, 180, 180))
+        if label.get_width() > slot_w - 4:
+            short = itype.value.split()[0]
+            label = small_font.render(short, True, (180, 180, 180))
+        screen.blit(label, label.get_rect(centerx=sx + slot_w // 2,
+                                          top=palette_y + 52))
+
+
+def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font, small_font):
+    """Draw the end-of-day results overlay. Returns (again_rect, menu_rect)."""
+    grade = get_grade(flow_rate)
+    grade_colors = {
+        'A': (80, 220, 80),
+        'B': (150, 220, 80),
+        'C': (255, 210, 50),
+        'D': (255, 130, 50),
+        'F': (255, 80, 80),
+    }
+    grade_color = grade_colors[grade]
+
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    overlay.set_alpha(180)
+    overlay.fill((0, 0, 0))
+    screen.blit(overlay, (0, 0))
+
+    pw, ph = 420, 280
+    px = (WINDOW_WIDTH - pw) // 2
+    py = (WINDOW_HEIGHT - ph) // 2
+    pygame.draw.rect(screen, (40, 40, 40), (px, py, pw, ph), border_radius=12)
+    pygame.draw.rect(screen, (100, 100, 100), (px, py, pw, ph), 2, border_radius=12)
+
+    header = font.render(f"{city}  —  Level {level}", True, (200, 200, 200))
+    screen.blit(header, header.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 18))
+
+    grade_surf = title_font.render(grade, True, grade_color)
+    screen.blit(grade_surf, grade_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 55))
+
+    fr_surf = font.render(f"Flow Rate:  {flow_rate:.2f}", True, grade_color)
+    screen.blit(fr_surf, fr_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 130))
+
+    del_surf = small_font.render(f"Cars Delivered:  {delivered}", True, (200, 200, 200))
+    screen.blit(del_surf, del_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 165))
+
+    mouse_pos = pygame.mouse.get_pos()
+    bw, bh = 160, 44
+
+    again_rect = pygame.Rect(px + 30, py + ph - 60, bw, bh)
+    again_hov = again_rect.collidepoint(mouse_pos)
+    pygame.draw.rect(screen, BUTTON_HOVER_COLOR if again_hov else BUTTON_COLOR,
+                     again_rect, border_radius=10)
+    again_label = font.render("Play Again", True, BUTTON_TEXT_COLOR)
+    screen.blit(again_label, again_label.get_rect(center=again_rect.center))
+
+    menu_rect = pygame.Rect(px + pw - 30 - bw, py + ph - 60, bw, bh)
+    menu_hov = menu_rect.collidepoint(mouse_pos)
+    pygame.draw.rect(screen, BUTTON_HOVER_COLOR if menu_hov else BUTTON_COLOR,
+                     menu_rect, border_radius=10)
+    menu_label = font.render("Main Menu", True, BUTTON_TEXT_COLOR)
+    screen.blit(menu_label, menu_label.get_rect(center=menu_rect.center))
+
+    return again_rect, menu_rect
+
+
 def run_game(screen, selected_city, selected_level):
     """Run the game for the selected city"""
     pygame.display.set_caption(f"City Limits - {selected_city} - Level {selected_level}")
@@ -453,17 +541,23 @@ def run_game(screen, selected_city, selected_level):
     small_font = pygame.font.Font(None, 28)
     marker_font = pygame.font.Font(None, 24)
 
-    # Draggable intersection tray at bottom
-    num_tray_intersections = 5
-    tray_y = WINDOW_HEIGHT - 40
-    tray_spacing = 70
-    tray_start_x = (WINDOW_WIDTH - (num_tray_intersections - 1) * tray_spacing) // 2
-    
-    # Create draggable intersections in the tray (None, None means not placed yet)
-    draggable_intersections = [
-        Intersection(None, None, tray_start_x + i * tray_spacing, tray_y)
-        for i in range(num_tray_intersections)
+    # --- Intersection palette (replaces old 5-node tray) ---
+    PALETTE_TYPES = [
+        IntersectionType.T_INTERSECTION,
+        IntersectionType.TRUMPET,
+        IntersectionType.Y_INTERSECTION,
+        IntersectionType.FOUR_WAY,
+        IntersectionType.ROUNDABOUT,
+        IntersectionType.CLOVERLEAF,
+        IntersectionType.DIAMOND,
+        IntersectionType.PARTIAL_CLOVERLEAF,
     ]
+    PALETTE_SLOT_W = 80
+    PALETTE_SLOT_H = 70
+    palette_start_x = (WINDOW_WIDTH - len(PALETTE_TYPES) * PALETTE_SLOT_W) // 2
+    palette_y = WINDOW_HEIGHT - PALETTE_SLOT_H
+
+    placed_intersections = []   # all intersections currently on the grid
     dragging_intersection = None
 
     # Car spawn system
@@ -492,6 +586,10 @@ def run_game(screen, selected_city, selected_level):
     is_started = False
     is_paused = False
     showing_quit_confirmation = False
+    game_ended = False
+
+    # Title font for end screen grade display
+    title_font = pygame.font.Font(None, 72)
     
     # Button for toggling pause when paused
     resume_button_rect = pygame.Rect(WINDOW_WIDTH - 210, 20, 100, 40)
@@ -504,7 +602,11 @@ def run_game(screen, selected_city, selected_level):
         # Only increment timer if game is started and not paused
         if is_started and not is_paused:
             game_timer += dt
-        
+
+        if is_started and not is_paused and not game_ended and game_timer >= GAME_DAY_LENGTH:
+            game_ended = True
+            is_started = False
+
         mouse_pos = pygame.mouse.get_pos()
         back_button_hovered = back_button_rect.collidepoint(mouse_pos)
         start_button_hovered = start_button_rect.collidepoint(mouse_pos)
@@ -571,10 +673,11 @@ def run_game(screen, selected_city, selected_level):
             for car in cars:
                 car.draw(screen)
             
-            for intersection in draggable_intersections:
-                if not intersection.snapped:
-                    intersection.draw(screen)
-            
+            draw_palette(screen, PALETTE_TYPES, palette_start_x, palette_y,
+                         PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos)
+            if dragging_intersection:
+                dragging_intersection.draw(screen)
+
             draw_quit_confirmation(screen, font, small_font)
             pygame.display.flip()
             continue
@@ -627,40 +730,58 @@ def run_game(screen, selected_city, selected_level):
             delta_alpha = max(0.0, delta_alpha - 127.5 * dt)  # fades over ~2 s
             delta_y_offset -= 25.0 * dt                       # floats upward
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return False  # Exit entire game
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if back_button_hovered:
-                    return True  # Return to level select
-                elif start_button_hovered:
-                    is_started = not is_started
-                    is_paused = False  # Unpause when starting
-                    spawn_timer = 0.0  # reset on both start and stop
-                elif pause_button_hovered:
-                    if is_started:
-                        if is_paused:
-                            showing_quit_confirmation = True  # Show quit dialog
-                        else:
-                            is_paused = True  # Pause the game
-                elif resume_button_hovered and is_paused:
-                    is_paused = False  # Resume the game
-                else:
-                    # Check if clicking on a draggable intersection
-                    for intersection in draggable_intersections:
-                        if intersection.is_clicked(mouse_pos):
-                            intersection.dragging = True
-                            dragging_intersection = intersection
+        if not game_ended:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return False  # Exit entire game
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if back_button_hovered:
+                        return True  # Return to level select
+                    elif start_button_hovered:
+                        is_started = not is_started
+                        is_paused = False  # Unpause when starting
+                        spawn_timer = 0.0  # reset on both start and stop
+                    elif pause_button_hovered:
+                        if is_started:
+                            if is_paused:
+                                showing_quit_confirmation = True  # Show quit dialog
+                            else:
+                                is_paused = True  # Pause the game
+                    elif resume_button_hovered and is_paused:
+                        is_paused = False  # Resume the game
+                    else:
+                        # Check palette — start dragging a new intersection of the clicked type
+                        for i, itype in enumerate(PALETTE_TYPES):
+                            sx = palette_start_x + i * PALETTE_SLOT_W
+                            slot_rect = pygame.Rect(sx, palette_y, PALETTE_SLOT_W, PALETTE_SLOT_H)
+                            if slot_rect.collidepoint(mouse_pos):
+                                dragging_intersection = Intersection(
+                                    None, None, mouse_pos[0], mouse_pos[1],
+                                    intersection_type=itype
+                                )
+                                break
+                if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if dragging_intersection:
+                        if dragging_intersection.snap_to_grid(
+                                grid_start_x, grid_start_y, CELL_SIZE, rows, cols):
+                            existing_key = (dragging_intersection.row, dragging_intersection.col)
+                            if existing_key in network.placed_intersections:
+                                old = network.placed_intersections[existing_key]
+                                if old in placed_intersections:
+                                    placed_intersections.remove(old)
+                            network.add_intersection(dragging_intersection)
+                            placed_intersections.append(dragging_intersection)
+                        dragging_intersection.dragging = False
+                        dragging_intersection = None
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_r and dragging_intersection:
+                        dragging_intersection.rotate()
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                    for placed in placed_intersections:
+                        if placed.is_clicked(mouse_pos):
+                            network.remove_intersection(placed)
+                            placed_intersections.remove(placed)
                             break
-            if event.type == pygame.MOUSEBUTTONUP:
-                # Release the dragged intersection
-                if dragging_intersection:
-                    # Try to snap to grid
-                    if dragging_intersection.snap_to_grid(grid_start_x, grid_start_y, CELL_SIZE, rows, cols):
-                        # Add to network
-                        network.add_intersection(dragging_intersection)
-                    dragging_intersection.dragging = False
-                    dragging_intersection = None
 
         # Update dragging position
         if dragging_intersection:
@@ -779,11 +900,26 @@ def run_game(screen, selected_city, selected_level):
         for car in cars:
             car.draw(screen)
 
-        # Draw draggable intersections in tray
-        for intersection in draggable_intersections:
-            # Only draw if not already placed on grid
-            if not intersection.snapped:
-                intersection.draw(screen)
+        # Draw palette and any intersection being dragged
+        draw_palette(screen, PALETTE_TYPES, palette_start_x, palette_y,
+                     PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos)
+        if dragging_intersection:
+            dragging_intersection.draw(screen)
+
+        if game_ended:
+            again_rect, menu_rect = draw_end_screen(
+                screen, flow_rate, len(completed_stats),
+                selected_city, selected_level, font, title_font, small_font
+            )
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return False
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    pos = pygame.mouse.get_pos()
+                    if again_rect.collidepoint(pos):
+                        return run_game(screen, selected_city, selected_level)
+                    if menu_rect.collidepoint(pos):
+                        return True
 
         # Update display
         pygame.display.flip()

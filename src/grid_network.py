@@ -3,6 +3,14 @@
 from collections import deque
 from intersection import Intersection
 
+# Maps grid direction to (arm needed by current cell, arm needed by neighbour)
+_DIR_ARMS = {
+    'up':    ('N', 'S'),
+    'down':  ('S', 'N'),
+    'left':  ('W', 'E'),
+    'right': ('E', 'W'),
+}
+
 
 class IntersectionNetwork:
     """Manages a grid of 4-way intersections and pathfinding between them."""
@@ -34,30 +42,41 @@ class IntersectionNetwork:
             self.grid[intersection.row][intersection.col] = intersection
             self.placed_intersections[(intersection.row, intersection.col)] = intersection
             self._reconnect_neighbors()
-    
+
+    def remove_intersection(self, intersection):
+        """Remove a placed intersection and tear down its connections."""
+        key = (intersection.row, intersection.col)
+        if key not in self.placed_intersections:
+            return
+        del self.placed_intersections[key]
+        self.grid[intersection.row][intersection.col] = None
+        intersection.snapped = False
+        intersection.snapped_row = None
+        intersection.snapped_col = None
+        intersection.row = None
+        intersection.col = None
+        self._reconnect_neighbors()
+
     def _reconnect_neighbors(self):
-        """Reconnect all intersections to their neighbors."""
-        # Clear existing connections
+        """Reconnect all intersections using arm-matching: both sides must face each other."""
         for intersection in self.placed_intersections.values():
             intersection.neighbors = {}
-        
-        # Add new connections
+
+        checks = {
+            'up':    (-1,  0),
+            'down':  ( 1,  0),
+            'left':  ( 0, -1),
+            'right': ( 0,  1),
+        }
+
         for (row, col), intersection in self.placed_intersections.items():
-            # Up
-            if row > 0 and (row - 1, col) in self.placed_intersections:
-                intersection.connect('up', self.placed_intersections[(row - 1, col)])
-            
-            # Down
-            if row < self.rows - 1 and (row + 1, col) in self.placed_intersections:
-                intersection.connect('down', self.placed_intersections[(row + 1, col)])
-            
-            # Left
-            if col > 0 and (row, col - 1) in self.placed_intersections:
-                intersection.connect('left', self.placed_intersections[(row, col - 1)])
-            
-            # Right
-            if col < self.cols - 1 and (row, col + 1) in self.placed_intersections:
-                intersection.connect('right', self.placed_intersections[(row, col + 1)])
+            for direction, (dr, dc) in checks.items():
+                nr, nc = row + dr, col + dc
+                if (nr, nc) in self.placed_intersections:
+                    neighbor = self.placed_intersections[(nr, nc)]
+                    my_arm, their_arm = _DIR_ARMS[direction]
+                    if my_arm in intersection.get_arms() and their_arm in neighbor.get_arms():
+                        intersection.connect(direction, neighbor)
     
     def get_intersection(self, row, col):
         """Get an intersection by grid position."""
