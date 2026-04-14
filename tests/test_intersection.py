@@ -12,8 +12,7 @@ ALL_ARMS = frozenset({'N', 'S', 'E', 'W'})
 
 def test_four_arm_types_return_all_arms():
     for t in (IntersectionType.FOUR_WAY, IntersectionType.ROUNDABOUT,
-              IntersectionType.CLOVERLEAF, IntersectionType.DIAMOND,
-              IntersectionType.PARTIAL_CLOVERLEAF):
+              IntersectionType.CLOVERLEAF, IntersectionType.DIAMOND):
         i = Intersection(0, 0, 100, 100, intersection_type=t)
         assert i.get_arms() == ALL_ARMS, f"{t} should have all 4 arms"
 
@@ -48,3 +47,12 @@ def test_four_arm_rotate_does_nothing():
 def test_default_type_is_four_way():
     i = Intersection(0, 0, 100, 100)
     assert i.get_arms() == ALL_ARMS
+
+
+def test_partial_cloverleaf_is_three_arm():
+    """PARTIAL_CLOVERLEAF should have 3 arms (rotation-dependent), not all 4."""
+    i = Intersection(0, 0, 100, 100, intersection_type=IntersectionType.PARTIAL_CLOVERLEAF)
+    assert len(i.get_arms()) == 3, "PARTIAL_CLOVERLEAF should have exactly 3 arms"
+    assert 'S' not in i.get_arms(), "rotation 0 should be missing S"
+    i.rotate()
+    assert 'W' not in i.get_arms(), "rotation 1 should be missing W"

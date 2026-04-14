@@ -13,7 +13,7 @@ _DIR_ARMS = {
 
 
 class IntersectionNetwork:
-    """Manages a grid of 4-way intersections and pathfinding between them."""
+    """Manages a grid of typed intersections and pathfinding between them."""
     
     def __init__(self, rows, cols, start_x, start_y, cell_size):
         """

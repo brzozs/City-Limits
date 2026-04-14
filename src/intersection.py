@@ -16,6 +16,7 @@ _THREE_ARM_TYPES = frozenset({
     IntersectionType.T_INTERSECTION,
     IntersectionType.TRUMPET,
     IntersectionType.Y_INTERSECTION,
+    IntersectionType.PARTIAL_CLOVERLEAF,
 })
 # rotation index → which arm is missing
 _MISSING_BY_ROTATION = {0: 'S', 1: 'W', 2: 'N', 3: 'E'}
@@ -25,20 +26,22 @@ class Intersection:
 
     def __init__(self, row, col, x, y, intersection_type=None):
         """
-        Initialize a 4-way intersection.
+        Initialize an intersection.
 
         Args:
             row: Grid row position (or None if not placed)
             col: Grid column position (or None if not placed)
             x: Screen x coordinate (center of intersection)
             y: Screen y coordinate (center of intersection)
-            intersection_type: IntersectionType enum value (default: FOUR_WAY)
+            intersection_type: IntersectionType enum value (default: FOUR_WAY).
+                3-arm types (T_INTERSECTION, TRUMPET, Y_INTERSECTION,
+                PARTIAL_CLOVERLEAF) use rotation to determine which arm is absent.
         """
         self.row = row
         self.col = col
         self.x = x
         self.y = y
-        self.intersection_type = intersection_type or IntersectionType.FOUR_WAY
+        self.intersection_type = IntersectionType.FOUR_WAY if intersection_type is None else intersection_type
         self.rotation = 0
         self.neighbors = {}  # {'up': Intersection, 'down': Intersection, 'left': Intersection, 'right': Intersection}
         self.width = 30

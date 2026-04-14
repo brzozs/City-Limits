@@ -288,7 +288,106 @@ def draw_quit_confirmation(screen, title_font, font):
     return yes_button_rect, no_button_rect
 
 
-def draw_spawn_markers(screen, markers, font):
+def draw_pause_overlay(screen, selected_city, selected_level, font, small_font, mouse_pos, confirm_exit=False):
+    """Draw the pause overlay card.
+
+    Returns (resume_rect, restart_rect, menu_rect, confirm_rects).
+    When confirm_exit is True the card shows a confirmation sub-screen and
+    resume/restart/menu_rect are None; confirm_rects is (yes_rect, no_rect).
+    """
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    overlay.set_alpha(180)
+    overlay.fill((0, 0, 0))
+    screen.blit(overlay, (0, 0))
+
+    pw, ph = 340, 310
+    px = (WINDOW_WIDTH - pw) // 2
+    py = (WINDOW_HEIGHT - ph) // 2
+    pygame.draw.rect(screen, (40, 40, 40), (px, py, pw, ph), border_radius=12)
+    pygame.draw.rect(screen, (100, 100, 100), (px, py, pw, ph), 2, border_radius=12)
+
+    header = font.render(f"{selected_city}  —  Level {selected_level}", True, (200, 200, 200))
+    screen.blit(header, header.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 18))
+
+    paused_surf = font.render("PAUSED", True, (255, 255, 255))
+    screen.blit(paused_surf, paused_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 55))
+
+    if not confirm_exit:
+        bw, bh = 230, 44
+        bx = (WINDOW_WIDTH - bw) // 2
+        resume_rect  = pygame.Rect(bx, py + 120, bw, bh)
+        restart_rect = pygame.Rect(bx, py + 178, bw, bh)
+        menu_rect    = pygame.Rect(bx, py + 236, bw, bh)
+        for rect, label in [(resume_rect, "Resume"), (restart_rect, "Restart"), (menu_rect, "Main Menu")]:
+            hov = rect.collidepoint(mouse_pos)
+            pygame.draw.rect(screen, BUTTON_HOVER_COLOR if hov else BUTTON_COLOR, rect, border_radius=10)
+            surf = font.render(label, True, BUTTON_TEXT_COLOR)
+            screen.blit(surf, surf.get_rect(center=rect.center))
+        return resume_rect, restart_rect, menu_rect, None
+    else:
+        msg = small_font.render("Return to menu? Progress will be lost.", True, (220, 180, 80))
+        screen.blit(msg, msg.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 120))
+        bw, bh = 140, 44
+        yes_rect = pygame.Rect(px + 40,           py + 210, bw, bh)
+        no_rect  = pygame.Rect(px + pw - 40 - bw, py + 210, bw, bh)
+        for rect, label in [(yes_rect, "Yes"), (no_rect, "No")]:
+            hov = rect.collidepoint(mouse_pos)
+            pygame.draw.rect(screen, BUTTON_HOVER_COLOR if hov else BUTTON_COLOR, rect, border_radius=10)
+            surf = font.render(label, True, BUTTON_TEXT_COLOR)
+            screen.blit(surf, surf.get_rect(center=rect.center))
+        return None, None, None, (yes_rect, no_rect)
+
+
+def draw_intro_overlay(screen, font, small_font, mouse_pos):
+    """Draw the first-time tutorial card. Returns got_it_rect."""
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    overlay.set_alpha(210)
+    overlay.fill((0, 0, 0))
+    screen.blit(overlay, (0, 0))
+
+    pw, ph = 540, 290
+    px = (WINDOW_WIDTH - pw) // 2
+    py = (WINDOW_HEIGHT - ph) // 2
+    pygame.draw.rect(screen, (40, 40, 40), (px, py, pw, ph), border_radius=12)
+    pygame.draw.rect(screen, (100, 100, 100), (px, py, pw, ph), 2, border_radius=12)
+
+    title_font_temp = pygame.font.Font(None, 42)
+    title = title_font_temp.render("How to Play", True, (255, 255, 255))
+    screen.blit(title, title.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 20))
+
+    goal = small_font.render(
+        "Connect spawn points to exit points so cars can flow through the city.",
+        True, (200, 200, 200))
+    screen.blit(goal, goal.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 65))
+
+    icons = [
+        (START_COLOR,       "IN — Cars start here"),
+        ((130, 130, 130),   "Drag intersections to build roads"),
+        (END_COLOR,         "OUT — Cars must reach here"),
+    ]
+    col_xs = [px + 90, px + 270, px + 450]
+    for (color, caption), cx in zip(icons, col_xs):
+        pygame.draw.circle(screen, color, (cx, py + 155), 14)
+        pygame.draw.circle(screen, (255, 255, 255), (cx, py + 155), 14, 2)
+        words = caption.split()
+        line1 = " ".join(words[:3])
+        line2 = " ".join(words[3:])
+        s1 = small_font.render(line1, True, (180, 180, 180))
+        screen.blit(s1, s1.get_rect(centerx=cx, top=py + 176))
+        if line2:
+            s2 = small_font.render(line2, True, (180, 180, 180))
+            screen.blit(s2, s2.get_rect(centerx=cx, top=py + 196))
+
+    bw, bh = 220, 44
+    got_it_rect = pygame.Rect((WINDOW_WIDTH - bw) // 2, py + ph - 62, bw, bh)
+    hov = got_it_rect.collidepoint(mouse_pos)
+    pygame.draw.rect(screen, BUTTON_HOVER_COLOR if hov else BUTTON_COLOR, got_it_rect, border_radius=10)
+    btn = font.render("Got it!", True, BUTTON_TEXT_COLOR)
+    screen.blit(btn, btn.get_rect(center=got_it_rect.center))
+    return got_it_rect
+
+
+def draw_spawn_markers(screen, markers, font, label_alpha=255):
     """Draw start/end markers just outside the grid edge."""
     for m in markers:
         x, y = m['x'], m['y']
@@ -317,6 +416,12 @@ def draw_spawn_markers(screen, markers, font):
         # S / E label
         text = font.render(label, True, (255, 255, 255))
         screen.blit(text, text.get_rect(center=(mx, my)))
+
+        # IN / OUT label below the circle
+        tag = "IN" if is_start else "OUT"
+        tag_surf = font.render(tag, True, color)
+        tag_surf.set_alpha(int(label_alpha))
+        screen.blit(tag_surf, tag_surf.get_rect(center=(mx, my + MARKER_RADIUS + 8)))
 
 
 def draw_menu(screen, font, title_font):
@@ -424,7 +529,7 @@ def draw_level_menu(screen, font, title_font, selected_city):
 
 
 def draw_palette(screen, palette_types, palette_start_x, palette_y,
-                 slot_w, slot_h, small_font, mouse_pos):
+                 slot_w, slot_h, small_font, mouse_pos, preview_cache=None):
     """Draw the intersection type palette strip at the bottom of the screen."""
     for i, itype in enumerate(palette_types):
         sx = palette_start_x + i * slot_w
@@ -434,9 +539,11 @@ def draw_palette(screen, palette_types, palette_start_x, palette_y,
         pygame.draw.rect(screen, bg, rect)
         pygame.draw.rect(screen, (90, 90, 90), rect, 1)
 
-        preview = Intersection(None, None, sx + slot_w // 2, palette_y + 28,
-                               intersection_type=itype)
-        preview.draw(screen)
+        if preview_cache and itype in preview_cache:
+            preview_cache[itype].draw(screen)
+        else:
+            Intersection(None, None, sx + slot_w // 2, palette_y + 28,
+                         intersection_type=itype).draw(screen)
 
         label = small_font.render(itype.value, True, (180, 180, 180))
         if label.get_width() > slot_w - 4:
@@ -446,7 +553,7 @@ def draw_palette(screen, palette_types, palette_start_x, palette_y,
                                           top=palette_y + 52))
 
 
-def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font, small_font):
+def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font, small_font, mouse_pos):
     """Draw the end-of-day results overlay. Returns (again_rect, menu_rect)."""
     grade = get_grade(flow_rate)
     grade_colors = {
@@ -481,7 +588,6 @@ def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font,
     del_surf = small_font.render(f"Cars Delivered:  {delivered}", True, (200, 200, 200))
     screen.blit(del_surf, del_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 165))
 
-    mouse_pos = pygame.mouse.get_pos()
     bw, bh = 160, 44
 
     again_rect = pygame.Rect(px + 30, py + ph - 60, bw, bh)
@@ -557,6 +663,17 @@ def run_game(screen, selected_city, selected_level):
     palette_start_x = (WINDOW_WIDTH - len(PALETTE_TYPES) * PALETTE_SLOT_W) // 2
     palette_y = WINDOW_HEIGHT - PALETTE_SLOT_H
 
+    # Cache one Intersection preview per palette type — avoids ~480 allocs/sec
+    _palette_previews = {
+        itype: Intersection(
+            None, None,
+            palette_start_x + i * PALETTE_SLOT_W + PALETTE_SLOT_W // 2,
+            palette_y + 28,
+            intersection_type=itype,
+        )
+        for i, itype in enumerate(PALETTE_TYPES)
+    }
+
     placed_intersections = []   # all intersections currently on the grid
     dragging_intersection = None
 
@@ -580,19 +697,24 @@ def run_game(screen, selected_city, selected_level):
     delta_y_offset = 0.0   # floats upward as it fades
 
     # Clock system — start at 07:00 so morning rush begins immediately
-    game_timer = GAME_DAY_LENGTH * 7 / 24
-    
+    game_timer = GAME_DAY_LENGTH * 7 / 24  # 07:00 start so morning rush begins immediately
+
     # Pause/Start system
     is_started = False
     is_paused = False
-    showing_quit_confirmation = False
+    pause_confirm_exit = False      # True when confirmation sub-card is showing
+    showing_intro = True            # Show tutorial card before player sets up
     game_ended = False
+
+    # Marker label fade
+    label_alpha = 255.0       # fades to 0 over 2s after first car spawns
+    first_car_spawned = False
+
+    # Hint particles: list of dicts {text, color, x, y, alpha, vy}
+    hint_particles = []
 
     # Title font for end screen grade display
     title_font = pygame.font.Font(None, 72)
-    
-    # Button for toggling pause when paused
-    resume_button_rect = pygame.Rect(WINDOW_WIDTH - 210, 20, 100, 40)
 
     # Game loop
     running = True
@@ -602,6 +724,8 @@ def run_game(screen, selected_city, selected_level):
         # Only increment timer if game is started and not paused
         if is_started and not is_paused:
             game_timer += dt
+            if first_car_spawned and label_alpha > 0:
+                label_alpha = max(0.0, label_alpha - 127.5 * dt)  # fades over ~2 s
 
         if is_started and not is_paused and not game_ended and game_timer >= GAME_DAY_LENGTH:
             game_ended = True
@@ -611,74 +735,75 @@ def run_game(screen, selected_city, selected_level):
         back_button_hovered = back_button_rect.collidepoint(mouse_pos)
         start_button_hovered = start_button_rect.collidepoint(mouse_pos)
         pause_button_hovered = pause_button_rect.collidepoint(mouse_pos)
-        resume_button_hovered = resume_button_rect.collidepoint(mouse_pos) if is_paused else False
 
-        # Handle quit confirmation dialog events first
-        if showing_quit_confirmation:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    return False
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    yes_rect, no_rect = draw_quit_confirmation(screen, font, small_font)
-                    mouse_pos_temp = pygame.mouse.get_pos()
-                    if yes_rect.collidepoint(mouse_pos_temp):
-                        return True  # Return to level select
-                    if no_rect.collidepoint(mouse_pos_temp):
-                        showing_quit_confirmation = False
-            
-            # Draw everything up to this point
+        # Pause overlay — draw game state, then overlay; handle only pause events.
+        if is_paused and not game_ended:
             screen.fill(BACKGROUND_COLOR)
-            mouse_pos = pygame.mouse.get_pos()
-            back_button_hovered_temp = back_button_rect.collidepoint(mouse_pos)
-            _qc_hour = draw_clock(screen, game_timer, font)
-            if (7 <= _qc_hour < 10) or (16 <= _qc_hour < 19):
+            _ph = draw_clock(screen, game_timer, font)
+            if (7 <= _ph < 10) or (16 <= _ph < 19):
                 rh_s = small_font.render("RUSH HOUR", True, (255, 165, 40))
                 screen.blit(rh_s, rh_s.get_rect(center=(WINDOW_WIDTH // 2, 38)))
-            draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
-            
-            # Draw resume and quit buttons when paused
-            if is_paused:
-                resume_hovered = resume_button_rect.collidepoint(mouse_pos)
-                resume_color = BUTTON_HOVER_COLOR if resume_hovered else BUTTON_COLOR
-                pygame.draw.rect(screen, resume_color, resume_button_rect, border_radius=10)
-                resume_text = small_font.render("Resume", True, BUTTON_TEXT_COLOR)
-                resume_text_rect = resume_text.get_rect(center=resume_button_rect.center)
-                screen.blit(resume_text, resume_text_rect)
-                
-                quit_hovered = pause_button_rect.collidepoint(mouse_pos)
-                quit_color = BUTTON_HOVER_COLOR if quit_hovered else BUTTON_COLOR
-                pygame.draw.rect(screen, quit_color, pause_button_rect, border_radius=10)
-                quit_text = small_font.render("Quit", True, BUTTON_TEXT_COLOR)
-                quit_text_rect = quit_text.get_rect(center=pause_button_rect.center)
-                screen.blit(quit_text, quit_text_rect)
-            
-            # Draw back button
-            back_button_color = BUTTON_HOVER_COLOR if back_button_hovered_temp else BUTTON_COLOR
-            pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=10)
-            back_text = small_font.render("Back", True, BUTTON_TEXT_COLOR)
-            back_text_rect = back_text.get_rect(center=back_button_rect.center)
-            screen.blit(back_text, back_text_rect)
-            
-            # Draw grid
+            draw_pause_controls(screen, start_button_rect, pause_button_rect,
+                                is_paused, is_started, small_font, mouse_pos)
+            back_col = BUTTON_HOVER_COLOR if back_button_rect.collidepoint(mouse_pos) else BUTTON_COLOR
+            pygame.draw.rect(screen, back_col, back_button_rect, border_radius=10)
+            screen.blit(small_font.render("Back", True, BUTTON_TEXT_COLOR),
+                        small_font.render("Back", True, BUTTON_TEXT_COLOR).get_rect(center=back_button_rect.center))
             for row in range(rows):
                 for col in range(cols):
                     x = grid_start_x + col * CELL_SIZE
                     y = grid_start_y + row * CELL_SIZE
                     pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
                     pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
-            
             network.draw(screen)
-            draw_spawn_markers(screen, spawn_markers, marker_font)
-            
+            draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
             for car in cars:
                 car.draw(screen)
-            
             draw_palette(screen, PALETTE_TYPES, palette_start_x, palette_y,
-                         PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos)
-            if dragging_intersection:
-                dragging_intersection.draw(screen)
+                         PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos, _palette_previews)
+            resume_r, restart_r, menu_r, conf = draw_pause_overlay(
+                screen, selected_city, selected_level, font, small_font, mouse_pos, pause_confirm_exit)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return False
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    pos = pygame.mouse.get_pos()
+                    if not pause_confirm_exit:
+                        if resume_r.collidepoint(pos):
+                            is_paused = False
+                        elif restart_r.collidepoint(pos):
+                            return "REPLAY"
+                        elif menu_r.collidepoint(pos):
+                            pause_confirm_exit = True
+                    else:
+                        yes_r, no_r = conf
+                        if yes_r.collidepoint(pos):
+                            return True
+                        elif no_r.collidepoint(pos):
+                            pause_confirm_exit = False
+                if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_p):
+                    if not pause_confirm_exit:
+                        is_paused = False
+            pygame.display.flip()
+            continue
 
-            draw_quit_confirmation(screen, font, small_font)
+        # Intro overlay — shown at level start, before the player sets up
+        if showing_intro:
+            screen.fill(BACKGROUND_COLOR)
+            for row in range(rows):
+                for col in range(cols):
+                    x = grid_start_x + col * CELL_SIZE
+                    y = grid_start_y + row * CELL_SIZE
+                    pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
+                    pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
+            draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
+            got_it_rect = draw_intro_overlay(screen, font, small_font, mouse_pos)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return False
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if got_it_rect.collidepoint(pygame.mouse.get_pos()):
+                        showing_intro = False
             pygame.display.flip()
             continue
 
@@ -706,11 +831,29 @@ def run_game(screen, selected_city, selected_level):
                             pixel_path = network.intersections_to_pixels(intersection_path)
                             cars.append(Car(pixel_path))
                             spawn_successes += 1
+                        else:
+                            hint_particles.append({
+                                'text': '?', 'color': (255, 160, 30),
+                                'x': float(start_m['x']), 'y': float(start_m['y']),
+                                'alpha': 255.0, 'vy': -40.0,
+                            })
+                    else:
+                        hint_particles.append({
+                            'text': '?', 'color': (255, 160, 30),
+                            'x': float(start_m['x']), 'y': float(start_m['y']),
+                            'alpha': 255.0, 'vy': -40.0,
+                        })
 
         # Collect stats from finished cars then remove them
         for car in cars:
             if car.done:
                 completed_stats.append((car.path_length, car.travel_time, car.idle_time))
+                first_car_spawned = True
+                hint_particles.append({
+                    'text': '+1', 'color': (80, 220, 80),
+                    'x': float(car.x), 'y': float(car.y),
+                    'alpha': 255.0, 'vy': -60.0,
+                })
         cars = [c for c in cars if not c.done]
 
         # Recalculate flow rate only when the underlying data has changed
@@ -742,13 +885,8 @@ def run_game(screen, selected_city, selected_level):
                         is_paused = False  # Unpause when starting
                         spawn_timer = 0.0  # reset on both start and stop
                     elif pause_button_hovered:
-                        if is_started:
-                            if is_paused:
-                                showing_quit_confirmation = True  # Show quit dialog
-                            else:
-                                is_paused = True  # Pause the game
-                    elif resume_button_hovered and is_paused:
-                        is_paused = False  # Resume the game
+                        if is_started and not is_paused:
+                            is_paused = True
                     else:
                         # Check palette — start dragging a new intersection of the clicked type
                         for i, itype in enumerate(PALETTE_TYPES):
@@ -858,23 +996,7 @@ def run_game(screen, selected_city, selected_level):
 
         # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
-        
-        # Draw resume and quit buttons when paused
-        if is_paused:
-            resume_hovered = resume_button_rect.collidepoint(mouse_pos)
-            resume_color = BUTTON_HOVER_COLOR if resume_hovered else BUTTON_COLOR
-            pygame.draw.rect(screen, resume_color, resume_button_rect, border_radius=10)
-            resume_text = small_font.render("Resume", True, BUTTON_TEXT_COLOR)
-            resume_text_rect = resume_text.get_rect(center=resume_button_rect.center)
-            screen.blit(resume_text, resume_text_rect)
-            
-            quit_hovered = pause_button_rect.collidepoint(mouse_pos)
-            quit_color = BUTTON_HOVER_COLOR if quit_hovered else BUTTON_COLOR
-            pygame.draw.rect(screen, quit_color, pause_button_rect, border_radius=10)
-            quit_text = small_font.render("Quit", True, BUTTON_TEXT_COLOR)
-            quit_text_rect = quit_text.get_rect(center=pause_button_rect.center)
-            screen.blit(quit_text, quit_text_rect)
-        
+
         # Draw back button
         back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
         pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=10)
@@ -894,22 +1016,32 @@ def run_game(screen, selected_city, selected_level):
         network.draw(screen)
 
         # Draw spawn/end markers
-        draw_spawn_markers(screen, spawn_markers, marker_font)
+        draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
 
         # Draw cars
         for car in cars:
             car.draw(screen)
 
+        # Update and draw hint particles
+        for p in hint_particles:
+            p['y'] += p['vy'] * dt
+            p['alpha'] = max(0.0, p['alpha'] - 255.0 * dt)
+        hint_particles = [p for p in hint_particles if p['alpha'] > 0]
+        for p in hint_particles:
+            p_surf = marker_font.render(p['text'], True, p['color'])
+            p_surf.set_alpha(int(p['alpha']))
+            screen.blit(p_surf, p_surf.get_rect(center=(int(p['x']), int(p['y']))))
+
         # Draw palette and any intersection being dragged
         draw_palette(screen, PALETTE_TYPES, palette_start_x, palette_y,
-                     PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos)
+                     PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos, _palette_previews)
         if dragging_intersection:
             dragging_intersection.draw(screen)
 
         if game_ended:
             again_rect, menu_rect = draw_end_screen(
                 screen, flow_rate, len(completed_stats),
-                selected_city, selected_level, font, title_font, small_font
+                selected_city, selected_level, font, title_font, small_font, mouse_pos
             )
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -917,7 +1049,7 @@ def run_game(screen, selected_city, selected_level):
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     pos = pygame.mouse.get_pos()
                     if again_rect.collidepoint(pos):
-                        return run_game(screen, selected_city, selected_level)
+                        return "REPLAY"
                     if menu_rect.collidepoint(pos):
                         return True
 
@@ -982,9 +1114,10 @@ def main():
             pygame.display.flip()
 
         elif current_state == STATE_GAME:
-            # Run game, returns True if should return to level select, False if should quit
-            should_continue = run_game(screen, selected_city, selected_level)
-            if should_continue:
+            result = run_game(screen, selected_city, selected_level)
+            while result == "REPLAY":
+                result = run_game(screen, selected_city, selected_level)
+            if result:
                 current_state = STATE_LEVEL_SELECT
             else:
                 running = False

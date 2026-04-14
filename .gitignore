@@ -63,3 +63,6 @@ htmlcov/
 
 # Git worktrees
 .worktrees/
+
+# Internal planning docs
+docs/
