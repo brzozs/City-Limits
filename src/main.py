@@ -32,6 +32,13 @@ STATE_MENU = "menu"
 STATE_LEVEL_SELECT = "level_select"
 STATE_GAME = "game"
 GAME_DAY_LENGTH = 300.0  # 5 minutes for a full 24-hour cycle
+MAX_LEVEL = 3
+LEVEL_PASS_TARGETS = {
+    1: 0.45,
+    2: 0.55,
+    3: 0.65,
+}
+UNDO_WINDOW_SECONDS = 4.0
 
 def calculate_flow_rate(completed_stats, spawn_attempts=0, spawn_successes=0):
     """Compute flow rate using the equation from the README:
@@ -468,7 +475,7 @@ def draw_menu(screen, font, title_font):
 
     return buttons
 
-def draw_level_menu(screen, font, title_font, selected_city):
+def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=1):
     """Draw the level selection menu for the selected city"""
     screen.fill(BACKGROUND_COLOR)
 
@@ -482,6 +489,11 @@ def draw_level_menu(screen, font, title_font, selected_city):
     subtitle_rect = subtitle.get_rect(center=(WINDOW_WIDTH // 2, 150))
     screen.blit(subtitle, subtitle_rect)
 
+    small_font = pygame.font.Font(None, 28)
+    unlocked_text = small_font.render(f"Unlocked Levels: 1-{max_unlocked_level}", True, (180, 180, 180))
+    unlocked_text_rect = unlocked_text.get_rect(center=(WINDOW_WIDTH // 2, 182))
+    screen.blit(unlocked_text, unlocked_text_rect)
+
     # Level buttons
     button_width = 200
     button_height = 60
@@ -493,6 +505,8 @@ def draw_level_menu(screen, font, title_font, selected_city):
     mouse_pos = pygame.mouse.get_pos()
 
     for i in range(3):
+        level_num = i + 1
+        is_unlocked = level_num <= max_unlocked_level
         button_y = start_y + i * button_spacing
         button_rect = pygame.Rect(
             (WINDOW_WIDTH - button_width) // 2,
@@ -502,16 +516,26 @@ def draw_level_menu(screen, font, title_font, selected_city):
         )
 
         # Check hover
-        is_hovered = button_rect.collidepoint(mouse_pos)
-        button_color = BUTTON_HOVER_COLOR if is_hovered else BUTTON_COLOR
+        if is_unlocked:
+            is_hovered = button_rect.collidepoint(mouse_pos)
+            button_color = BUTTON_HOVER_COLOR if is_hovered else BUTTON_COLOR
+            text_color = BUTTON_TEXT_COLOR
+        else:
+            button_color = (65, 65, 65)
+            text_color = (140, 140, 140)
 
         # Draw button
         pygame.draw.rect(screen, button_color, button_rect, border_radius=10)
 
         # Draw text
-        button_text = font.render(f"Level {level_names[i]}", True, BUTTON_TEXT_COLOR)
+        button_text = font.render(f"Level {level_names[i]}", True, text_color)
         text_rect = button_text.get_rect(center=button_rect.center)
         screen.blit(button_text, text_rect)
+
+        if not is_unlocked:
+            lock_text = small_font.render("Locked", True, (170, 170, 170))
+            lock_rect = lock_text.get_rect(center=(button_rect.centerx, button_rect.centery + 18))
+            screen.blit(lock_text, lock_rect)
 
         buttons.append(button_rect)
 
@@ -520,12 +544,22 @@ def draw_level_menu(screen, font, title_font, selected_city):
     back_button_hovered = back_button_rect.collidepoint(mouse_pos)
     back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
     pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=10)
-    small_font = pygame.font.Font(None, 28)
     back_text = small_font.render("Back", True, BUTTON_TEXT_COLOR)
     back_text_rect = back_text.get_rect(center=back_button_rect.center)
     screen.blit(back_text, back_text_rect)
 
     return buttons, back_button_rect
+
+
+def draw_undo_prompt(screen, small_font, undo_timer):
+    """Draw a temporary undo prompt after deleting an intersection."""
+    msg = f"Intersection deleted. Press U to undo ({undo_timer:.1f}s)"
+    msg_surf = small_font.render(msg, True, (245, 245, 245))
+    msg_rect = msg_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 105))
+    box_rect = msg_rect.inflate(20, 12)
+    pygame.draw.rect(screen, (20, 20, 20), box_rect, border_radius=10)
+    pygame.draw.rect(screen, (255, 170, 90), box_rect, 2, border_radius=10)
+    screen.blit(msg_surf, msg_rect)
 
 
 def draw_palette(screen, palette_types, palette_start_x, palette_y,
@@ -553,8 +587,9 @@ def draw_palette(screen, palette_types, palette_start_x, palette_y,
                                           top=palette_y + 52))
 
 
-def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font, small_font, mouse_pos):
-    """Draw the end-of-day results overlay. Returns (again_rect, menu_rect)."""
+def draw_end_screen(screen, flow_rate, delivered, city, level, target_flow, passed,
+                    has_next_level, font, title_font, small_font, mouse_pos):
+    """Draw end-of-day results. Returns (again_rect, menu_rect, next_rect)."""
     grade = get_grade(flow_rate)
     grade_colors = {
         'A': (80, 220, 80),
@@ -570,7 +605,7 @@ def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font,
     overlay.fill((0, 0, 0))
     screen.blit(overlay, (0, 0))
 
-    pw, ph = 420, 280
+    pw, ph = 500, 330
     px = (WINDOW_WIDTH - pw) // 2
     py = (WINDOW_HEIGHT - ph) // 2
     pygame.draw.rect(screen, (40, 40, 40), (px, py, pw, ph), border_radius=12)
@@ -582,32 +617,82 @@ def draw_end_screen(screen, flow_rate, delivered, city, level, font, title_font,
     grade_surf = title_font.render(grade, True, grade_color)
     screen.blit(grade_surf, grade_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 55))
 
-    fr_surf = font.render(f"Flow Rate:  {flow_rate:.2f}", True, grade_color)
+    fr_surf = font.render(f"Flow Rate: {flow_rate:.2f}", True, grade_color)
     screen.blit(fr_surf, fr_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 130))
 
+    target_surf = small_font.render(f"Target: {target_flow:.2f}", True, (210, 210, 210))
+    screen.blit(target_surf, target_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 168))
+
+    if passed and has_next_level:
+        result_text = "PASS - Next level unlocked"
+        result_color = (90, 230, 120)
+    elif passed:
+        result_text = "CITY COMPLETE"
+        result_color = (90, 230, 120)
+    else:
+        result_text = "Below target - try again"
+        result_color = (255, 120, 90)
+    result_surf = small_font.render(result_text, True, result_color)
+    screen.blit(result_surf, result_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 194))
+
     del_surf = small_font.render(f"Cars Delivered:  {delivered}", True, (200, 200, 200))
-    screen.blit(del_surf, del_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 165))
+    screen.blit(del_surf, del_surf.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 222))
 
-    bw, bh = 160, 44
+    bh = 44
+    by = py + ph - 60
 
-    again_rect = pygame.Rect(px + 30, py + ph - 60, bw, bh)
-    again_hov = again_rect.collidepoint(mouse_pos)
-    pygame.draw.rect(screen, BUTTON_HOVER_COLOR if again_hov else BUTTON_COLOR,
-                     again_rect, border_radius=10)
-    again_label = font.render("Play Again", True, BUTTON_TEXT_COLOR)
-    screen.blit(again_label, again_label.get_rect(center=again_rect.center))
+    if has_next_level:
+        bw = 150
+        gap = 10
+        total_w = bw * 3 + gap * 2
+        bx = (WINDOW_WIDTH - total_w) // 2
 
-    menu_rect = pygame.Rect(px + pw - 30 - bw, py + ph - 60, bw, bh)
-    menu_hov = menu_rect.collidepoint(mouse_pos)
-    pygame.draw.rect(screen, BUTTON_HOVER_COLOR if menu_hov else BUTTON_COLOR,
-                     menu_rect, border_radius=10)
-    menu_label = font.render("Main Menu", True, BUTTON_TEXT_COLOR)
-    screen.blit(menu_label, menu_label.get_rect(center=menu_rect.center))
+        again_rect = pygame.Rect(bx, by, bw, bh)
+        again_hov = again_rect.collidepoint(mouse_pos)
+        pygame.draw.rect(screen, BUTTON_HOVER_COLOR if again_hov else BUTTON_COLOR,
+                         again_rect, border_radius=10)
+        again_label = font.render("Play Again", True, BUTTON_TEXT_COLOR)
+        screen.blit(again_label, again_label.get_rect(center=again_rect.center))
 
-    return again_rect, menu_rect
+        next_rect = pygame.Rect(bx + bw + gap, by, bw, bh)
+        next_hov = next_rect.collidepoint(mouse_pos)
+        pygame.draw.rect(screen, BUTTON_HOVER_COLOR if next_hov else BUTTON_COLOR,
+                         next_rect, border_radius=10)
+        next_label = font.render("Next Level", True, BUTTON_TEXT_COLOR)
+        screen.blit(next_label, next_label.get_rect(center=next_rect.center))
+
+        menu_rect = pygame.Rect(bx + 2 * (bw + gap), by, bw, bh)
+        menu_hov = menu_rect.collidepoint(mouse_pos)
+        pygame.draw.rect(screen, BUTTON_HOVER_COLOR if menu_hov else BUTTON_COLOR,
+                         menu_rect, border_radius=10)
+        menu_label = font.render("Main Menu", True, BUTTON_TEXT_COLOR)
+        screen.blit(menu_label, menu_label.get_rect(center=menu_rect.center))
+    else:
+        bw = 180
+        gap = 18
+        total_w = bw * 2 + gap
+        bx = (WINDOW_WIDTH - total_w) // 2
+
+        again_rect = pygame.Rect(bx, by, bw, bh)
+        again_hov = again_rect.collidepoint(mouse_pos)
+        pygame.draw.rect(screen, BUTTON_HOVER_COLOR if again_hov else BUTTON_COLOR,
+                         again_rect, border_radius=10)
+        again_label = font.render("Play Again", True, BUTTON_TEXT_COLOR)
+        screen.blit(again_label, again_label.get_rect(center=again_rect.center))
+
+        menu_rect = pygame.Rect(bx + bw + gap, by, bw, bh)
+        menu_hov = menu_rect.collidepoint(mouse_pos)
+        pygame.draw.rect(screen, BUTTON_HOVER_COLOR if menu_hov else BUTTON_COLOR,
+                         menu_rect, border_radius=10)
+        menu_label = font.render("Main Menu", True, BUTTON_TEXT_COLOR)
+        screen.blit(menu_label, menu_label.get_rect(center=menu_rect.center))
+
+        next_rect = None
+
+    return again_rect, menu_rect, next_rect
 
 
-def run_game(screen, selected_city, selected_level):
+def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     """Run the game for the selected city"""
     pygame.display.set_caption(f"City Limits - {selected_city} - Level {selected_level}")
 
@@ -705,6 +790,8 @@ def run_game(screen, selected_city, selected_level):
     pause_confirm_exit = False      # True when confirmation sub-card is showing
     showing_intro = True            # Show tutorial card before player sets up
     game_ended = False
+    level_target = LEVEL_PASS_TARGETS.get(selected_level, LEVEL_PASS_TARGETS[1])
+    progress_recorded = False
 
     # Marker label fade
     label_alpha = 255.0       # fades to 0 over 2s after first car spawns
@@ -712,6 +799,10 @@ def run_game(screen, selected_city, selected_level):
 
     # Hint particles: list of dicts {text, color, x, y, alpha, vy}
     hint_particles = []
+
+    # Undo state for right-click delete
+    pending_undo_data = None
+    undo_timer = 0.0
 
     # Title font for end screen grade display
     title_font = pygame.font.Font(None, 72)
@@ -726,6 +817,11 @@ def run_game(screen, selected_city, selected_level):
             game_timer += dt
             if first_car_spawned and label_alpha > 0:
                 label_alpha = max(0.0, label_alpha - 127.5 * dt)  # fades over ~2 s
+
+        if undo_timer > 0.0:
+            undo_timer = max(0.0, undo_timer - dt)
+            if undo_timer == 0.0:
+                pending_undo_data = None
 
         if is_started and not is_paused and not game_ended and game_timer >= GAME_DAY_LENGTH:
             game_ended = True
@@ -914,11 +1010,51 @@ def run_game(screen, selected_city, selected_level):
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_r and dragging_intersection:
                         dragging_intersection.rotate()
+                    elif event.key == pygame.K_u and pending_undo_data and undo_timer > 0.0:
+                        row = pending_undo_data['row']
+                        col = pending_undo_data['col']
+                        restore_key = (row, col)
+                        if restore_key not in network.placed_intersections:
+                            restored = Intersection(
+                                row,
+                                col,
+                                grid_start_x + col * CELL_SIZE + CELL_SIZE // 2,
+                                grid_start_y + row * CELL_SIZE + CELL_SIZE // 2,
+                                intersection_type=pending_undo_data['intersection_type'],
+                            )
+                            restored.rotation = pending_undo_data['rotation']
+                            restored.snapped = True
+                            restored.snapped_row = row
+                            restored.snapped_col = col
+                            network.add_intersection(restored)
+                            placed_intersections.append(restored)
+                            hint_particles.append({
+                                'text': 'U', 'color': (80, 220, 80),
+                                'x': pending_undo_data['x'], 'y': pending_undo_data['y'],
+                                'alpha': 255.0, 'vy': -55.0,
+                            })
+                        else:
+                            hint_particles.append({
+                                'text': 'X', 'color': (255, 100, 100),
+                                'x': pending_undo_data['x'], 'y': pending_undo_data['y'],
+                                'alpha': 255.0, 'vy': -45.0,
+                            })
+                        pending_undo_data = None
+                        undo_timer = 0.0
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                     for placed in placed_intersections:
                         if placed.is_clicked(mouse_pos):
+                            pending_undo_data = {
+                                'row': placed.row,
+                                'col': placed.col,
+                                'rotation': placed.rotation,
+                                'intersection_type': placed.intersection_type,
+                                'x': float(placed.x),
+                                'y': float(placed.y),
+                            }
                             network.remove_intersection(placed)
                             placed_intersections.remove(placed)
+                            undo_timer = UNDO_WINDOW_SECONDS
                             break
 
         # Update dragging position
@@ -994,6 +1130,9 @@ def run_game(screen, selected_city, selected_level):
             screen.blit(delta_surf, delta_surf.get_rect(
                 bottomright=(WINDOW_WIDTH - 10, int(base_y + delta_y_offset))))
 
+        if pending_undo_data and undo_timer > 0.0 and not game_ended:
+            draw_undo_prompt(screen, small_font, undo_timer)
+
         # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
 
@@ -1039,9 +1178,30 @@ def run_game(screen, selected_city, selected_level):
             dragging_intersection.draw(screen)
 
         if game_ended:
-            again_rect, menu_rect = draw_end_screen(
-                screen, flow_rate, len(completed_stats),
-                selected_city, selected_level, font, title_font, small_font, mouse_pos
+            level_passed = flow_rate >= level_target
+            has_next_level = level_passed and selected_level < MAX_LEVEL
+
+            if not progress_recorded:
+                if level_passed and unlocked_levels is not None and selected_level < MAX_LEVEL:
+                    unlocked_levels[selected_city] = max(
+                        unlocked_levels.get(selected_city, 1),
+                        selected_level + 1,
+                    )
+                progress_recorded = True
+
+            again_rect, menu_rect, next_rect = draw_end_screen(
+                screen,
+                flow_rate,
+                len(completed_stats),
+                selected_city,
+                selected_level,
+                level_target,
+                level_passed,
+                has_next_level,
+                font,
+                title_font,
+                small_font,
+                mouse_pos,
             )
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -1050,6 +1210,8 @@ def run_game(screen, selected_city, selected_level):
                     pos = pygame.mouse.get_pos()
                     if again_rect.collidepoint(pos):
                         return "REPLAY"
+                    if next_rect and next_rect.collidepoint(pos):
+                        return "NEXT_LEVEL"
                     if menu_rect.collidepoint(pos):
                         return True
 
@@ -1070,6 +1232,7 @@ def main():
     selected_city = None
     selected_level = None
     city_names = ["New York City", "Los Angeles", "Chicago"]
+    unlocked_levels = {city: 1 for city in city_names}
 
     running = True
     while running:
@@ -1093,7 +1256,14 @@ def main():
 
         elif current_state == STATE_LEVEL_SELECT:
             # Draw level selection menu
-            level_buttons, back_button = draw_level_menu(screen, font, title_font, selected_city)
+            max_unlocked_level = unlocked_levels.get(selected_city, 1)
+            level_buttons, back_button = draw_level_menu(
+                screen,
+                font,
+                title_font,
+                selected_city,
+                max_unlocked_level=max_unlocked_level,
+            )
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -1106,7 +1276,8 @@ def main():
                     else:
                         # Check which level button was clicked
                         for i, button in enumerate(level_buttons):
-                            if button.collidepoint(mouse_pos):
+                            level_num = i + 1
+                            if button.collidepoint(mouse_pos) and level_num <= max_unlocked_level:
                                 selected_level = i + 1  # Levels 1, 2, 3
                                 current_state = STATE_GAME
                                 break
@@ -1114,10 +1285,13 @@ def main():
             pygame.display.flip()
 
         elif current_state == STATE_GAME:
-            result = run_game(screen, selected_city, selected_level)
+            result = run_game(screen, selected_city, selected_level, unlocked_levels)
             while result == "REPLAY":
-                result = run_game(screen, selected_city, selected_level)
-            if result:
+                result = run_game(screen, selected_city, selected_level, unlocked_levels)
+            if result == "NEXT_LEVEL":
+                selected_level = min(MAX_LEVEL, selected_level + 1)
+                current_state = STATE_GAME
+            elif result:
                 current_state = STATE_LEVEL_SELECT
             else:
                 running = False
