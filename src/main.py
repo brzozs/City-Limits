@@ -389,7 +389,7 @@ def draw_intro_overlay(screen, font, small_font, mouse_pos):
     got_it_rect = pygame.Rect((WINDOW_WIDTH - bw) // 2, py + ph - 62, bw, bh)
     hov = got_it_rect.collidepoint(mouse_pos)
     pygame.draw.rect(screen, BUTTON_HOVER_COLOR if hov else BUTTON_COLOR, got_it_rect, border_radius=10)
-    btn = font.render("Got it!", True, BUTTON_TEXT_COLOR)
+    btn = font.render("Got it & Start", True, BUTTON_TEXT_COLOR)
     screen.blit(btn, btn.get_rect(center=got_it_rect.center))
     return got_it_rect
 
@@ -562,6 +562,27 @@ def draw_undo_prompt(screen, small_font, undo_timer):
     screen.blit(msg_surf, msg_rect)
 
 
+def draw_control_hint_strip(screen, hint_font):
+    """Draw a compact control hint strip for new players."""
+    msg = "Drag to place | R rotate | Right-click delete | U undo | P/Esc pause"
+    msg_surf = hint_font.render(msg, True, (225, 225, 225))
+    strip_rect = msg_surf.get_rect(center=(WINDOW_WIDTH // 2, 66))
+    bg_rect = strip_rect.inflate(20, 10)
+    pygame.draw.rect(screen, (25, 25, 25), bg_rect, border_radius=8)
+    pygame.draw.rect(screen, (85, 85, 85), bg_rect, 1, border_radius=8)
+    screen.blit(msg_surf, strip_rect)
+
+
+def draw_button_tooltip(screen, small_font, rect, text):
+    """Draw a simple tooltip below a hovered control button."""
+    tip_surf = small_font.render(text, True, (245, 245, 245))
+    tip_rect = tip_surf.get_rect(midtop=(rect.centerx, rect.bottom + 6))
+    bg_rect = tip_rect.inflate(14, 8)
+    pygame.draw.rect(screen, (20, 20, 20), bg_rect, border_radius=6)
+    pygame.draw.rect(screen, (95, 95, 95), bg_rect, 1, border_radius=6)
+    screen.blit(tip_surf, tip_rect)
+
+
 def draw_palette(screen, palette_types, palette_start_x, palette_y,
                  slot_w, slot_h, small_font, mouse_pos, preview_cache=None):
     """Draw the intersection type palette strip at the bottom of the screen."""
@@ -731,6 +752,7 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     font = pygame.font.Font(None, 36)
     small_font = pygame.font.Font(None, 28)
     marker_font = pygame.font.Font(None, 24)
+    hint_font = pygame.font.Font(None, 24)
 
     # --- Intersection palette (replaces old 5-node tray) ---
     PALETTE_TYPES = [
@@ -900,6 +922,9 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if got_it_rect.collidepoint(pygame.mouse.get_pos()):
                         showing_intro = False
+                        is_started = True
+                        is_paused = False
+                        spawn_timer = 0.0
             pygame.display.flip()
             continue
 
@@ -1135,6 +1160,17 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
 
         # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
+
+        # Draw compact control hints and hover tooltips
+        if not game_ended:
+            draw_control_hint_strip(screen, hint_font)
+            if back_button_hovered:
+                draw_button_tooltip(screen, marker_font, back_button_rect, "Back to level select")
+            elif start_button_hovered:
+                start_tip = "Start traffic" if not is_started else "Stop traffic"
+                draw_button_tooltip(screen, marker_font, start_button_rect, start_tip)
+            elif pause_button_hovered and is_started and not is_paused:
+                draw_button_tooltip(screen, marker_font, pause_button_rect, "Pause (P/Esc)")
 
         # Draw back button
         back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
