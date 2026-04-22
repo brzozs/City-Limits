@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07131f" />
+    <meta
+      name="description"
+      content="City Limits mobile demo: place intersections, survive rush hour, and improve traffic flow."
+    />
+    <title>City Limits Mobile Demo</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero-band">
+        <div class="hero-copy">
+          <p class="eyebrow">Mobile Traffic Design Demo</p>
+          <h1>City Limits</h1>
+          <p class="hero-text">
+            Build better intersections before rush hour wins. This phone-friendly version lets you
+            try the core loop right from a QR code.
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-pill">Touch-first</div>
+          <div class="status-pill">Real city volume curves</div>
+          <div class="status-pill">1-minute levels</div>
+        </div>
+      </header>
+
+      <main id="app" class="app-root" aria-live="polite"></main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "City Limits Mobile Demo",
+  "short_name": "City Limits",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#07131f",
+  "theme_color": "#07131f",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
