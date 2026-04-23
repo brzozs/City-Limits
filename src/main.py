@@ -1,3 +1,4 @@
+import asyncio
 import pygame
 import sys
 import random
@@ -39,6 +40,82 @@ LEVEL_PASS_TARGETS = {
     3: 0.65,
 }
 UNDO_WINDOW_SECONDS = 4.0
+TOUCH_ACTION_ORDER = ("rotate", "delete", "undo")
+TOUCH_ACTION_LABELS = {
+    "rotate": "Rotate",
+    "delete": "Delete",
+    "undo": "Undo",
+}
+
+
+def is_browser_runtime(platform_name=None):
+    """Return True when running inside an Emscripten/pygbag browser build."""
+    if platform_name is None:
+        platform_name = sys.platform
+    return platform_name == "emscripten"
+
+
+def normalize_pointer_event(event, screen_width=WINDOW_WIDTH, screen_height=WINDOW_HEIGHT):
+    """Convert mouse or touch input into a shared pointer event payload."""
+    mouse_types = {
+        pygame.MOUSEBUTTONDOWN: "down",
+        pygame.MOUSEBUTTONUP: "up",
+        pygame.MOUSEMOTION: "move",
+    }
+    touch_types = {
+        pygame.FINGERDOWN: "down",
+        pygame.FINGERUP: "up",
+        pygame.FINGERMOTION: "move",
+    }
+
+    if event.type in mouse_types:
+        return {
+            "kind": mouse_types[event.type],
+            "pos": getattr(event, "pos", pygame.mouse.get_pos()),
+            "button": getattr(event, "button", 1),
+            "pointer": "mouse",
+        }
+
+    if event.type in touch_types:
+        return {
+            "kind": touch_types[event.type],
+            "pos": (screen_width * event.x, screen_height * event.y),
+            "button": 1,
+            "pointer": "touch",
+        }
+
+    return None
+
+
+def get_touch_toolbar_button_rects(window_width=WINDOW_WIDTH, window_height=WINDOW_HEIGHT):
+    """Return the fixed browser touch toolbar button layout."""
+    button_width = 150
+    button_height = 54
+    gap = 12
+    total_width = button_width * len(TOUCH_ACTION_ORDER) + gap * (len(TOUCH_ACTION_ORDER) - 1)
+    start_x = (window_width - total_width) // 2
+    top = window_height - button_height - 20
+
+    return {
+        name: pygame.Rect(
+            start_x + index * (button_width + gap),
+            top,
+            button_width,
+            button_height,
+        )
+        for index, name in enumerate(TOUCH_ACTION_ORDER)
+    }
+
+
+def get_touch_action_states(has_dragging, has_selected, can_undo):
+    """Report which browser touch actions are currently available."""
+    has_dragging = bool(has_dragging)
+    has_selected = bool(has_selected)
+    return {
+        "rotate": has_dragging or has_selected,
+        "delete": has_selected and not has_dragging,
+        "undo": bool(can_undo),
+    }
 
 def calculate_flow_rate(completed_stats, spawn_attempts=0, spawn_successes=0):
     """Compute flow rate using the equation from the README:
@@ -123,6 +200,25 @@ def edge_pixel(side, index, start_x, start_y, cell_size, rows, cols):
         return (start_x + cols * cell_size, start_y + index * cell_size + half)
 
 
+def compute_grid_origin(rows, cols, cell_size, left_ui_right_edge=240):
+    """Compute a grid origin that avoids overlapping the left-side UI panel."""
+    grid_width = cols * cell_size
+    grid_height = rows * cell_size
+    centered_x = (WINDOW_WIDTH - grid_width) // 2
+    centered_y = (WINDOW_HEIGHT - grid_height) // 2
+
+    marker_clearance = MARKER_OFFSET + MARKER_RADIUS
+    min_x = left_ui_right_edge + marker_clearance
+    max_x = WINDOW_WIDTH - grid_width - marker_clearance
+
+    if max_x >= min_x:
+        safe_x = max(min_x, min(centered_x, max_x))
+    else:
+        safe_x = centered_x
+
+    return safe_x, centered_y
+
+
 def generate_spawn_points(level, rows, cols, start_x, start_y, cell_size):
     """Return a list of marker dicts for the given level.
 
@@ -196,7 +292,7 @@ def _find_nearest_intersection(network, x, y):
 
 
 
-def draw_clock(screen, elapsed_seconds, font):
+def draw_clock(screen, elapsed_seconds, font, center=(WINDOW_WIDTH // 2, 20)):
     """Draw the game clock at the top center of the screen.
 
     Cycles through a 24-hour day (midnight to midnight).
@@ -219,7 +315,7 @@ def draw_clock(screen, elapsed_seconds, font):
         clock_color = (255, 255, 255)  # white — normal hours
 
     clock_text = font.render(time_str, True, clock_color)
-    text_rect = clock_text.get_rect(center=(WINDOW_WIDTH // 2, 20))
+    text_rect = clock_text.get_rect(center=center)
     screen.blit(clock_text, text_rect)
     return hours
 
@@ -345,6 +441,27 @@ def draw_pause_overlay(screen, selected_city, selected_level, font, small_font, 
         return None, None, None, (yes_rect, no_rect)
 
 
+def wrap_text_lines(text, font, max_width):
+    """Wrap text to fit within max_width pixels."""
+    words = text.split()
+    lines = []
+    current_words = []
+
+    for word in words:
+        trial = " ".join(current_words + [word])
+        if font.size(trial)[0] <= max_width:
+            current_words.append(word)
+        else:
+            if current_words:
+                lines.append(" ".join(current_words))
+            current_words = [word]
+
+    if current_words:
+        lines.append(" ".join(current_words))
+
+    return lines
+
+
 def draw_intro_overlay(screen, font, small_font, mouse_pos):
     """Draw the first-time tutorial card. Returns got_it_rect."""
     overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -362,10 +479,13 @@ def draw_intro_overlay(screen, font, small_font, mouse_pos):
     title = title_font_temp.render("How to Play", True, (255, 255, 255))
     screen.blit(title, title.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 20))
 
-    goal = small_font.render(
-        "Connect spawn points to exit points so cars can flow through the city.",
-        True, (200, 200, 200))
-    screen.blit(goal, goal.get_rect(centerx=WINDOW_WIDTH // 2, top=py + 65))
+    goal_text = "Connect spawn points to exit points so cars can flow through the city."
+    goal_lines = wrap_text_lines(goal_text, small_font, pw - 60)
+    goal_top = py + 65
+    line_height = small_font.get_linesize()
+    for i, line in enumerate(goal_lines):
+        goal = small_font.render(line, True, (200, 200, 200))
+        screen.blit(goal, goal.get_rect(centerx=WINDOW_WIDTH // 2, top=goal_top + i * line_height))
 
     icons = [
         (START_COLOR,       "IN — Cars start here"),
@@ -376,14 +496,10 @@ def draw_intro_overlay(screen, font, small_font, mouse_pos):
     for (color, caption), cx in zip(icons, col_xs):
         pygame.draw.circle(screen, color, (cx, py + 155), 14)
         pygame.draw.circle(screen, (255, 255, 255), (cx, py + 155), 14, 2)
-        words = caption.split()
-        line1 = " ".join(words[:3])
-        line2 = " ".join(words[3:])
-        s1 = small_font.render(line1, True, (180, 180, 180))
-        screen.blit(s1, s1.get_rect(centerx=cx, top=py + 176))
-        if line2:
-            s2 = small_font.render(line2, True, (180, 180, 180))
-            screen.blit(s2, s2.get_rect(centerx=cx, top=py + 196))
+        caption_lines = wrap_text_lines(caption, small_font, 150)
+        for line_index, line in enumerate(caption_lines[:2]):
+            s_line = small_font.render(line, True, (180, 180, 180))
+            screen.blit(s_line, s_line.get_rect(centerx=cx, top=py + 176 + line_index * 20))
 
     bw, bh = 220, 44
     got_it_rect = pygame.Rect((WINDOW_WIDTH - bw) // 2, py + ph - 62, bw, bh)
@@ -424,14 +540,24 @@ def draw_spawn_markers(screen, markers, font, label_alpha=255):
         text = font.render(label, True, (255, 255, 255))
         screen.blit(text, text.get_rect(center=(mx, my)))
 
-        # IN / OUT label below the circle
+        # Place IN / OUT labels toward the grid so edge labels stay on-screen.
         tag = "IN" if is_start else "OUT"
         tag_surf = font.render(tag, True, color)
         tag_surf.set_alpha(int(label_alpha))
-        screen.blit(tag_surf, tag_surf.get_rect(center=(mx, my + MARKER_RADIUS + 8)))
+
+        if side == 'top':
+            tag_center = (mx, my + MARKER_RADIUS + 8)
+        elif side == 'bottom':
+            tag_center = (mx, my - MARKER_RADIUS - 8)
+        elif side == 'left':
+            tag_center = (mx + MARKER_RADIUS + 12, my)
+        else:  # right
+            tag_center = (mx - MARKER_RADIUS - 12, my)
+
+        screen.blit(tag_surf, tag_surf.get_rect(center=tag_center))
 
 
-def draw_menu(screen, font, title_font):
+def draw_menu(screen, font, title_font, all_unlocked=False):
     """Draw the main menu with city selection"""
     screen.fill(BACKGROUND_COLOR)
 
@@ -473,7 +599,27 @@ def draw_menu(screen, font, title_font):
 
         buttons.append(button_rect)
 
-    return buttons
+    # Small utility button for quickly unlocking all levels.
+    small_font = pygame.font.Font(None, 24)
+    unlock_w, unlock_h = 126, 32
+    unlock_button_rect = pygame.Rect(WINDOW_WIDTH - unlock_w - 14, 14, unlock_w, unlock_h)
+    unlock_hovered = unlock_button_rect.collidepoint(mouse_pos)
+
+    if all_unlocked:
+        base_color = (78, 145, 90)
+        hover_color = (96, 168, 108)
+        button_label = "All Unlocked"
+    else:
+        base_color = (85, 85, 85)
+        hover_color = (110, 110, 110)
+        button_label = "Unlock All"
+
+    unlock_color = hover_color if unlock_hovered else base_color
+    pygame.draw.rect(screen, unlock_color, unlock_button_rect, border_radius=8)
+    unlock_text = small_font.render(button_label, True, BUTTON_TEXT_COLOR)
+    screen.blit(unlock_text, unlock_text.get_rect(center=unlock_button_rect.center))
+
+    return buttons, unlock_button_rect
 
 def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=1):
     """Draw the level selection menu for the selected city"""
@@ -528,13 +674,16 @@ def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=
         pygame.draw.rect(screen, button_color, button_rect, border_radius=10)
 
         # Draw text
-        button_text = font.render(f"Level {level_names[i]}", True, text_color)
-        text_rect = button_text.get_rect(center=button_rect.center)
-        screen.blit(button_text, text_rect)
-
-        if not is_unlocked:
+        if is_unlocked:
+            button_text = font.render(f"Level {level_names[i]}", True, text_color)
+            text_rect = button_text.get_rect(center=button_rect.center)
+            screen.blit(button_text, text_rect)
+        else:
+            level_text = small_font.render(f"Level {level_names[i]}", True, text_color)
+            level_rect = level_text.get_rect(center=(button_rect.centerx, button_rect.centery - 10))
+            screen.blit(level_text, level_rect)
             lock_text = small_font.render("Locked", True, (170, 170, 170))
-            lock_rect = lock_text.get_rect(center=(button_rect.centerx, button_rect.centery + 18))
+            lock_rect = lock_text.get_rect(center=(button_rect.centerx, button_rect.centery + 12))
             screen.blit(lock_text, lock_rect)
 
         buttons.append(button_rect)
@@ -551,11 +700,11 @@ def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=
     return buttons, back_button_rect
 
 
-def draw_undo_prompt(screen, small_font, undo_timer):
+def draw_undo_prompt(screen, small_font, undo_timer, anchor_x=150):
     """Draw a temporary undo prompt after deleting an intersection."""
-    msg = f"Intersection deleted. Press U to undo ({undo_timer:.1f}s)"
+    msg = f"Deleted. Press U to undo ({undo_timer:.1f}s)"
     msg_surf = small_font.render(msg, True, (245, 245, 245))
-    msg_rect = msg_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 105))
+    msg_rect = msg_surf.get_rect(center=(anchor_x, WINDOW_HEIGHT - 105))
     box_rect = msg_rect.inflate(20, 12)
     pygame.draw.rect(screen, (20, 20, 20), box_rect, border_radius=10)
     pygame.draw.rect(screen, (255, 170, 90), box_rect, 2, border_radius=10)
@@ -564,9 +713,9 @@ def draw_undo_prompt(screen, small_font, undo_timer):
 
 def draw_control_hint_strip(screen, hint_font):
     """Draw a compact control hint strip for new players."""
-    msg = "Drag to place | R rotate | Right-click delete | U undo | P/Esc pause"
+    msg = "R rotate | Right-click delete | U undo | P/Esc pause"
     msg_surf = hint_font.render(msg, True, (225, 225, 225))
-    strip_rect = msg_surf.get_rect(center=(WINDOW_WIDTH // 2, 66))
+    strip_rect = msg_surf.get_rect(bottomleft=(18, WINDOW_HEIGHT - 14))
     bg_rect = strip_rect.inflate(20, 10)
     pygame.draw.rect(screen, (25, 25, 25), bg_rect, border_radius=8)
     pygame.draw.rect(screen, (85, 85, 85), bg_rect, 1, border_radius=8)
@@ -583,29 +732,170 @@ def draw_button_tooltip(screen, small_font, rect, text):
     screen.blit(tip_surf, tip_rect)
 
 
-def draw_palette(screen, palette_types, palette_start_x, palette_y,
-                 slot_w, slot_h, small_font, mouse_pos, preview_cache=None):
-    """Draw the intersection type palette strip at the bottom of the screen."""
-    for i, itype in enumerate(palette_types):
-        sx = palette_start_x + i * slot_w
-        rect = pygame.Rect(sx, palette_y, slot_w, slot_h)
+def draw_touch_toolbar(screen, label_font, mouse_pos, action_states):
+    """Draw browser-only touch controls for rotate/delete/undo."""
+    button_rects = get_touch_toolbar_button_rects()
+    heading = label_font.render("Touch Controls", True, (205, 205, 205))
+    heading_rect = heading.get_rect(midbottom=(WINDOW_WIDTH // 2, button_rects["rotate"].top - 8))
+    screen.blit(heading, heading_rect)
 
-        bg = (70, 70, 70) if rect.collidepoint(mouse_pos) else (50, 50, 50)
-        pygame.draw.rect(screen, bg, rect)
-        pygame.draw.rect(screen, (90, 90, 90), rect, 1)
-
-        if preview_cache and itype in preview_cache:
-            preview_cache[itype].draw(screen)
+    for name in TOUCH_ACTION_ORDER:
+        rect = button_rects[name]
+        active = action_states[name]
+        hovered = active and rect.collidepoint(mouse_pos)
+        if active:
+            fill = BUTTON_HOVER_COLOR if hovered else BUTTON_COLOR
+            border = (185, 220, 245)
+            text_color = BUTTON_TEXT_COLOR
         else:
-            Intersection(None, None, sx + slot_w // 2, palette_y + 28,
-                         intersection_type=itype).draw(screen)
+            fill = (58, 58, 58)
+            border = (88, 88, 88)
+            text_color = (150, 150, 150)
 
-        label = small_font.render(itype.value, True, (180, 180, 180))
-        if label.get_width() > slot_w - 4:
+        pygame.draw.rect(screen, fill, rect, border_radius=12)
+        pygame.draw.rect(screen, border, rect, 2, border_radius=12)
+        label = label_font.render(TOUCH_ACTION_LABELS[name], True, text_color)
+        screen.blit(label, label.get_rect(center=rect.center))
+
+    return button_rects
+
+
+def _palette_slot_rect(panel_rect, index, slot_h, header_h, margin=10):
+    """Return the rect for one intersection slot inside the side panel."""
+    return pygame.Rect(
+        panel_rect.x + margin,
+        panel_rect.y + header_h + margin + index * slot_h,
+        panel_rect.width - margin * 2,
+        slot_h - 6,
+    )
+
+
+def draw_palette_toggle_button(screen, button_rect, is_open, small_font, mouse_pos):
+    """Draw the left-side button that toggles the intersection menu."""
+    hovered = button_rect.collidepoint(mouse_pos)
+    color = BUTTON_HOVER_COLOR if hovered else BUTTON_COLOR
+    pygame.draw.rect(screen, color, button_rect, border_radius=10)
+    label = "Close Menu" if is_open else "Intersections"
+    text = small_font.render(label, True, BUTTON_TEXT_COLOR)
+    screen.blit(text, text.get_rect(center=button_rect.center))
+
+
+def draw_palette_menu(screen, panel_rect, palette_types, used_types,
+                      slot_h, header_h, label_font, mouse_pos, preview_cache=None):
+    """Draw the expandable left-side intersection menu."""
+    pygame.draw.rect(screen, (28, 28, 28), panel_rect, border_radius=12)
+    pygame.draw.rect(screen, (95, 95, 95), panel_rect, 2, border_radius=12)
+
+    remaining = len(palette_types) - len(used_types)
+    title = label_font.render(f"Intersections ({remaining} left)", True, (225, 225, 225))
+    screen.blit(title, title.get_rect(x=panel_rect.x + 12, y=panel_rect.y + 8))
+
+    for i, itype in enumerate(palette_types):
+        slot_rect = _palette_slot_rect(panel_rect, i, slot_h, header_h)
+        used = itype in used_types
+        hovered = slot_rect.collidepoint(mouse_pos) and not used
+
+        if used:
+            bg = (45, 45, 45)
+            border = (85, 85, 85)
+            text_color = (140, 140, 140)
+        else:
+            bg = (72, 72, 72) if hovered else (56, 56, 56)
+            border = (120, 120, 120)
+            text_color = (220, 220, 220)
+
+        pygame.draw.rect(screen, bg, slot_rect, border_radius=8)
+        pygame.draw.rect(screen, border, slot_rect, 1, border_radius=8)
+
+        icon_x = slot_rect.x + 30
+        icon_y = slot_rect.centery
+        if preview_cache and itype in preview_cache:
+            preview = preview_cache[itype]
+            preview.x = icon_x
+            preview.y = icon_y
+            preview.draw(screen)
+        else:
+            Intersection(None, None, icon_x, icon_y, intersection_type=itype).draw(screen)
+
+        label = label_font.render(itype.value, True, text_color)
+        if label.get_width() > slot_rect.width - 104:
             short = itype.value.split()[0]
-            label = small_font.render(short, True, (180, 180, 180))
-        screen.blit(label, label.get_rect(centerx=sx + slot_w // 2,
-                                          top=palette_y + 52))
+            label = label_font.render(short, True, text_color)
+        screen.blit(label, label.get_rect(midleft=(slot_rect.x + 62, slot_rect.centery)))
+
+        if used:
+            used_surf = label_font.render("USED", True, (255, 120, 120))
+            screen.blit(used_surf, used_surf.get_rect(midright=(slot_rect.right - 8, slot_rect.centery)))
+
+
+def _find_clicked_placed_intersection(placed_intersections, pos):
+    """Return the top-most placed intersection under the pointer, if any."""
+    for placed in reversed(placed_intersections):
+        if placed.is_clicked(pos):
+            return placed
+    return None
+
+
+def _delete_placed_intersection(placed, network, placed_intersections):
+    """Delete an intersection and capture undo metadata."""
+    pending_undo_data = {
+        'row': placed.row,
+        'col': placed.col,
+        'rotation': placed.rotation,
+        'intersection_type': placed.intersection_type,
+        'x': float(placed.x),
+        'y': float(placed.y),
+    }
+    network.remove_intersection(placed)
+    if placed in placed_intersections:
+        placed_intersections.remove(placed)
+    return pending_undo_data
+
+
+def _restore_deleted_intersection(pending_undo_data, network, placed_intersections,
+                                  grid_start_x, grid_start_y, cell_size):
+    """Restore the most recently deleted intersection if its cell is still open."""
+    row = pending_undo_data['row']
+    col = pending_undo_data['col']
+    restore_key = (row, col)
+    if restore_key in network.placed_intersections:
+        return None
+
+    restored = Intersection(
+        row,
+        col,
+        grid_start_x + col * cell_size + cell_size // 2,
+        grid_start_y + row * cell_size + cell_size // 2,
+        intersection_type=pending_undo_data['intersection_type'],
+    )
+    restored.rotation = pending_undo_data['rotation']
+    restored.snapped = True
+    restored.snapped_row = row
+    restored.snapped_col = col
+    network.add_intersection(restored)
+    placed_intersections.append(restored)
+    return restored
+
+
+def _place_dragging_intersection(dragging_intersection, network, placed_intersections,
+                                 used_palette_types, grid_start_x, grid_start_y,
+                                 cell_size, rows, cols):
+    """Attempt to place the currently dragged intersection on the grid."""
+    if not dragging_intersection.snap_to_grid(
+        grid_start_x, grid_start_y, cell_size, rows, cols
+    ):
+        return False
+
+    placed_type = dragging_intersection.intersection_type
+    existing_key = (dragging_intersection.row, dragging_intersection.col)
+    if existing_key in network.placed_intersections:
+        old = network.placed_intersections[existing_key]
+        if old in placed_intersections:
+            placed_intersections.remove(old)
+    network.add_intersection(dragging_intersection)
+    placed_intersections.append(dragging_intersection)
+    used_palette_types.add(placed_type)
+    return True
 
 
 def draw_end_screen(screen, flow_rate, delivered, city, level, target_flow, passed,
@@ -713,48 +1003,37 @@ def draw_end_screen(screen, flow_rate, delivered, city, level, target_flow, pass
     return again_rect, menu_rect, next_rect
 
 
-def run_game(screen, selected_city, selected_level, unlocked_levels=None):
-    """Run the game for the selected city"""
+async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
+    """Run the game for the selected city."""
     pygame.display.set_caption(f"City Limits - {selected_city} - Level {selected_level}")
 
-    # Grid configurations: (rows, cols) for each level
-    # Level 1: 1x3 (1 row, 3 columns)
-    # Level 2: 2x3 (2 rows, 3 columns)
-    # Level 3: 3x3 (3 rows, 3 columns)
     grid_configs = {
         1: (1, 3),
         2: (2, 3),
-        3: (3, 3)
+        3: (3, 3),
     }
-
-    # Get the grid configuration for the selected level
-    current_grid = grid_configs[selected_level]
-    rows, cols = current_grid
-
-    # Compute grid screen position — always centered on screen
-    grid_start_x = (WINDOW_WIDTH - cols * CELL_SIZE) // 2
-    grid_start_y = (WINDOW_HEIGHT - rows * CELL_SIZE) // 2
-
-    # Create the intersection network
+    rows, cols = grid_configs[selected_level]
+    grid_start_x, grid_start_y = compute_grid_origin(rows, cols, CELL_SIZE, left_ui_right_edge=240)
     network = IntersectionNetwork(rows, cols, grid_start_x, grid_start_y, CELL_SIZE)
 
-    # Generate spawn/end markers once for this level
     spawn_markers = generate_spawn_points(
         selected_level, rows, cols, grid_start_x, grid_start_y, CELL_SIZE
     )
     starts = [m for m in spawn_markers if m['type'] == 'start']
-    ends   = [m for m in spawn_markers if m['type'] == 'end']
+    ends = [m for m in spawn_markers if m['type'] == 'end']
 
-    # Button setup
     back_button_rect = pygame.Rect(20, 20, 100, 40)
     start_button_rect = pygame.Rect(130, 20, 100, 40)
     pause_button_rect = pygame.Rect(WINDOW_WIDTH - 100, 20, 100, 40)
+    clock_anchor = (WINDOW_WIDTH // 2, 20)
+    rush_anchor = (260, 38)
     font = pygame.font.Font(None, 36)
     small_font = pygame.font.Font(None, 28)
+    hud_font = pygame.font.Font(None, 22)
     marker_font = pygame.font.Font(None, 24)
     hint_font = pygame.font.Font(None, 24)
+    touch_font = pygame.font.Font(None, 24)
 
-    # --- Intersection palette (replaces old 5-node tray) ---
     PALETTE_TYPES = [
         IntersectionType.T_INTERSECTION,
         IntersectionType.TRUMPET,
@@ -765,80 +1044,71 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
         IntersectionType.DIAMOND,
         IntersectionType.PARTIAL_CLOVERLEAF,
     ]
-    PALETTE_SLOT_W = 80
-    PALETTE_SLOT_H = 70
-    palette_start_x = (WINDOW_WIDTH - len(PALETTE_TYPES) * PALETTE_SLOT_W) // 2
-    palette_y = WINDOW_HEIGHT - PALETTE_SLOT_H
+    PALETTE_SLOT_H = 58
+    PALETTE_HEADER_H = 34
+    PALETTE_PANEL_W = 220
+    palette_toggle_rect = pygame.Rect(20, WINDOW_HEIGHT // 2 - 22, 160, 44)
+    palette_panel_rect = pygame.Rect(
+        20,
+        72,
+        PALETTE_PANEL_W,
+        PALETTE_HEADER_H + 20 + len(PALETTE_TYPES) * PALETTE_SLOT_H,
+    )
+    palette_open = False
+    used_palette_types = set()
 
-    # Cache one Intersection preview per palette type — avoids ~480 allocs/sec
     _palette_previews = {
-        itype: Intersection(
-            None, None,
-            palette_start_x + i * PALETTE_SLOT_W + PALETTE_SLOT_W // 2,
-            palette_y + 28,
-            intersection_type=itype,
-        )
-        for i, itype in enumerate(PALETTE_TYPES)
+        itype: Intersection(None, None, 0, 0, intersection_type=itype)
+        for itype in PALETTE_TYPES
     }
 
-    placed_intersections = []   # all intersections currently on the grid
+    placed_intersections = []
     dragging_intersection = None
+    selected_intersection = None
 
-    # Car spawn system
     cars = []
     clock = pygame.time.Clock()
     spawn_timer = 0.0
 
-    # Scoring
-    completed_stats = []   # (path_length, travel_time, idle_time) per finished car
+    completed_stats = []
     flow_rate = 0.0
-    spawn_attempts = 0     # how many cars the network tried to route
-    spawn_successes = 0    # how many cars actually found a valid path
-    _stats_len = 0         # cached length of completed_stats for change detection
-    _prev_attempts = 0     # cached spawn_attempts for change detection
+    spawn_attempts = 0
+    spawn_successes = 0
+    _stats_len = 0
+    _prev_attempts = 0
 
-    # Visual feedback state for score change indicator
     prev_flow_rate = 0.0
     score_delta = 0.0
-    delta_alpha = 0.0      # 0–255; fades to 0 over ~2 seconds
-    delta_y_offset = 0.0   # floats upward as it fades
+    delta_alpha = 0.0
+    delta_y_offset = 0.0
 
-    # Clock system — start at 07:00 so morning rush begins immediately
-    game_timer = GAME_DAY_LENGTH * 7 / 24  # 07:00 start so morning rush begins immediately
-
-    # Pause/Start system
+    game_timer = GAME_DAY_LENGTH * 7 / 24
     is_started = False
     is_paused = False
-    pause_confirm_exit = False      # True when confirmation sub-card is showing
-    showing_intro = True            # Show tutorial card before player sets up
+    pause_confirm_exit = False
+    showing_intro = selected_level == 1
     game_ended = False
     level_target = LEVEL_PASS_TARGETS.get(selected_level, LEVEL_PASS_TARGETS[1])
     progress_recorded = False
-
-    # Marker label fade
-    label_alpha = 255.0       # fades to 0 over 2s after first car spawns
+    label_alpha = 255.0
     first_car_spawned = False
-
-    # Hint particles: list of dicts {text, color, x, y, alpha, vy}
     hint_particles = []
-
-    # Undo state for right-click delete
     pending_undo_data = None
     undo_timer = 0.0
-
-    # Title font for end screen grade display
     title_font = pygame.font.Font(None, 72)
 
-    # Game loop
+    browser_mode = is_browser_runtime()
+    pointer_pos = pygame.mouse.get_pos()
+    last_touch_event_ms = -1000
+
     running = True
     while running:
-        dt = min(clock.tick(60) / 1000.0, 0.1)  # cap at 100 ms to prevent lag-spike glitches
-        
-        # Only increment timer if game is started and not paused
+        dt = min(clock.tick(60) / 1000.0, 0.1)
+
         if is_started and not is_paused:
             game_timer += dt
             if first_car_spawned and label_alpha > 0:
-                label_alpha = max(0.0, label_alpha - 127.5 * dt)  # fades over ~2 s
+                label_alpha = max(0.0, label_alpha - 127.5 * dt)
 
         if undo_timer > 0.0:
             undo_timer = max(0.0, undo_timer - dt)
@@ -849,43 +1119,80 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
             game_ended = True
             is_started = False
 
-        mouse_pos = pygame.mouse.get_pos()
+        if selected_intersection and selected_intersection not in placed_intersections:
+            selected_intersection = None
+
+        mouse_pos = pointer_pos
         back_button_hovered = back_button_rect.collidepoint(mouse_pos)
         start_button_hovered = start_button_rect.collidepoint(mouse_pos)
         pause_button_hovered = pause_button_rect.collidepoint(mouse_pos)
+        touch_action_states = get_touch_action_states(
+            dragging_intersection is not None,
+            selected_intersection is not None,
+            pending_undo_data and undo_timer > 0.0,
+        )
 
-        # Pause overlay — draw game state, then overlay; handle only pause events.
         if is_paused and not game_ended:
             screen.fill(BACKGROUND_COLOR)
-            _ph = draw_clock(screen, game_timer, font)
-            if (7 <= _ph < 10) or (16 <= _ph < 19):
-                rh_s = small_font.render("RUSH HOUR", True, (255, 165, 40))
-                screen.blit(rh_s, rh_s.get_rect(center=(WINDOW_WIDTH // 2, 38)))
-            draw_pause_controls(screen, start_button_rect, pause_button_rect,
-                                is_paused, is_started, small_font, mouse_pos)
+            pause_hour = draw_clock(screen, game_timer, font, center=clock_anchor)
+            if (7 <= pause_hour < 10) or (16 <= pause_hour < 19):
+                rh_surf = small_font.render("RUSH HOUR", True, (255, 165, 40))
+                screen.blit(rh_surf, rh_surf.get_rect(center=rush_anchor))
+
+            draw_pause_controls(
+                screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos
+            )
             back_col = BUTTON_HOVER_COLOR if back_button_rect.collidepoint(mouse_pos) else BUTTON_COLOR
             pygame.draw.rect(screen, back_col, back_button_rect, border_radius=10)
-            screen.blit(small_font.render("Back", True, BUTTON_TEXT_COLOR),
-                        small_font.render("Back", True, BUTTON_TEXT_COLOR).get_rect(center=back_button_rect.center))
+            back_surf = small_font.render("Back", True, BUTTON_TEXT_COLOR)
+            screen.blit(back_surf, back_surf.get_rect(center=back_button_rect.center))
+
             for row in range(rows):
                 for col in range(cols):
                     x = grid_start_x + col * CELL_SIZE
                     y = grid_start_y + row * CELL_SIZE
                     pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
                     pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
-            network.draw(screen)
+
+            network.draw(screen, highlighted_intersection=selected_intersection)
             draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
             for car in cars:
                 car.draw(screen)
-            draw_palette(screen, PALETTE_TYPES, palette_start_x, palette_y,
-                         PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos, _palette_previews)
+
+            draw_palette_toggle_button(screen, palette_toggle_rect, palette_open, marker_font, mouse_pos)
+            if palette_open:
+                draw_palette_menu(
+                    screen,
+                    palette_panel_rect,
+                    PALETTE_TYPES,
+                    used_palette_types,
+                    PALETTE_SLOT_H,
+                    PALETTE_HEADER_H,
+                    marker_font,
+                    mouse_pos,
+                    _palette_previews,
+                )
+
             resume_r, restart_r, menu_r, conf = draw_pause_overlay(
-                screen, selected_city, selected_level, font, small_font, mouse_pos, pause_confirm_exit)
+                screen, selected_city, selected_level, font, small_font, mouse_pos, pause_confirm_exit
+            )
+
             for event in pygame.event.get():
+                normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
+                if normalized and normalized["pointer"] == "touch":
+                    last_touch_event_ms = pygame.time.get_ticks()
+                elif normalized and browser_mode and normalized["pointer"] == "mouse":
+                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                        normalized = None
+
+                if normalized:
+                    mouse_pos = normalized["pos"]
+                    pointer_pos = mouse_pos
+
                 if event.type == pygame.QUIT:
                     return False
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    pos = pygame.mouse.get_pos()
+                if normalized and normalized["kind"] == "down" and normalized["button"] == 1:
+                    pos = normalized["pos"]
                     if not pause_confirm_exit:
                         if resume_r.collidepoint(pos):
                             is_paused = False
@@ -897,15 +1204,16 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                         yes_r, no_r = conf
                         if yes_r.collidepoint(pos):
                             return True
-                        elif no_r.collidepoint(pos):
+                        if no_r.collidepoint(pos):
                             pause_confirm_exit = False
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_p):
                     if not pause_confirm_exit:
                         is_paused = False
+
             pygame.display.flip()
+            await asyncio.sleep(0)
             continue
 
-        # Intro overlay — shown at level start, before the player sets up
         if showing_intro:
             screen.fill(BACKGROUND_COLOR)
             for row in range(rows):
@@ -916,68 +1224,82 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                     pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
             draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
             got_it_rect = draw_intro_overlay(screen, font, small_font, mouse_pos)
+
             for event in pygame.event.get():
+                normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
+                if normalized and normalized["pointer"] == "touch":
+                    last_touch_event_ms = pygame.time.get_ticks()
+                elif normalized and browser_mode and normalized["pointer"] == "mouse":
+                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                        normalized = None
+
+                if normalized:
+                    mouse_pos = normalized["pos"]
+                    pointer_pos = mouse_pos
+
                 if event.type == pygame.QUIT:
                     return False
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if got_it_rect.collidepoint(pygame.mouse.get_pos()):
+                if normalized and normalized["kind"] == "down" and normalized["button"] == 1:
+                    if got_it_rect.collidepoint(normalized["pos"]):
                         showing_intro = False
                         is_started = True
                         is_paused = False
                         spawn_timer = 0.0
+
             pygame.display.flip()
+            await asyncio.sleep(0)
             continue
 
-        # Spawn a new wave of cars when the timer fires.
-        # Interval is derived from real traffic volume at the current game hour:
-        # peak hours (rush hour) → short interval; overnight → long interval.
         current_spawn_interval = get_spawn_interval(selected_city, game_timer, GAME_DAY_LENGTH, selected_level)
-        spawn_timer += dt if (is_started and not is_paused) else 0
+        spawn_timer += dt if (is_started and not is_paused) else 0.0
         if spawn_timer >= current_spawn_interval and ends and is_started:
             spawn_timer = 0.0
             for start_m in starts:
                 end_m = random.choice(ends)
-
-                # Only count attempts once the player has placed intersections
                 if network.get_all_intersections():
                     spawn_attempts += 1
                     start_int = _find_nearest_intersection(network, start_m['x'], start_m['y'])
                     end_int = _find_nearest_intersection(network, end_m['x'], end_m['y'])
 
                     if start_int and end_int:
-                        # Find path through intersection network
                         intersection_path = network.find_path(start_int, end_int)
                         if intersection_path:
-                            # Convert to pixel coordinates
                             pixel_path = network.intersections_to_pixels(intersection_path)
                             cars.append(Car(pixel_path))
                             spawn_successes += 1
                         else:
                             hint_particles.append({
-                                'text': '?', 'color': (255, 160, 30),
-                                'x': float(start_m['x']), 'y': float(start_m['y']),
-                                'alpha': 255.0, 'vy': -40.0,
+                                'text': '?',
+                                'color': (255, 160, 30),
+                                'x': float(start_m['x']),
+                                'y': float(start_m['y']),
+                                'alpha': 255.0,
+                                'vy': -40.0,
                             })
                     else:
                         hint_particles.append({
-                            'text': '?', 'color': (255, 160, 30),
-                            'x': float(start_m['x']), 'y': float(start_m['y']),
-                            'alpha': 255.0, 'vy': -40.0,
+                            'text': '?',
+                            'color': (255, 160, 30),
+                            'x': float(start_m['x']),
+                            'y': float(start_m['y']),
+                            'alpha': 255.0,
+                            'vy': -40.0,
                         })
 
-        # Collect stats from finished cars then remove them
         for car in cars:
             if car.done:
                 completed_stats.append((car.path_length, car.travel_time, car.idle_time))
                 first_car_spawned = True
                 hint_particles.append({
-                    'text': '+1', 'color': (80, 220, 80),
-                    'x': float(car.x), 'y': float(car.y),
-                    'alpha': 255.0, 'vy': -60.0,
+                    'text': '+1',
+                    'color': (80, 220, 80),
+                    'x': float(car.x),
+                    'y': float(car.y),
+                    'alpha': 255.0,
+                    'vy': -60.0,
                 })
         cars = [c for c in cars if not c.done]
 
-        # Recalculate flow rate only when the underlying data has changed
         if len(completed_stats) != _stats_len or spawn_attempts != _prev_attempts:
             new_flow_rate = calculate_flow_rate(completed_stats, spawn_attempts, spawn_successes)
             _stats_len = len(completed_stats)
@@ -989,121 +1311,215 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                 prev_flow_rate = new_flow_rate
             flow_rate = new_flow_rate
 
-        # Advance delta animation
         if delta_alpha > 0:
-            delta_alpha = max(0.0, delta_alpha - 127.5 * dt)  # fades over ~2 s
-            delta_y_offset -= 25.0 * dt                       # floats upward
+            delta_alpha = max(0.0, delta_alpha - 127.5 * dt)
+            delta_y_offset -= 25.0 * dt
 
         if not game_ended:
             for event in pygame.event.get():
+                normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
+                if normalized and normalized["pointer"] == "touch":
+                    last_touch_event_ms = pygame.time.get_ticks()
+                elif normalized and browser_mode and normalized["pointer"] == "mouse":
+                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                        normalized = None
+
+                if normalized:
+                    mouse_pos = normalized["pos"]
+                    pointer_pos = mouse_pos
+
                 if event.type == pygame.QUIT:
-                    return False  # Exit entire game
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if back_button_hovered:
-                        return True  # Return to level select
-                    elif start_button_hovered:
+                    return False
+
+                if normalized and normalized["kind"] == "down" and normalized["button"] == 1:
+                    pos = normalized["pos"]
+
+                    if browser_mode:
+                        touch_buttons = get_touch_toolbar_button_rects()
+                        if touch_action_states["rotate"] and touch_buttons["rotate"].collidepoint(pos):
+                            if dragging_intersection:
+                                dragging_intersection.rotate()
+                            elif selected_intersection:
+                                selected_intersection.rotate()
+                                network.add_intersection(selected_intersection)
+                            continue
+                        if touch_action_states["delete"] and touch_buttons["delete"].collidepoint(pos):
+                            pending_undo_data = _delete_placed_intersection(
+                                selected_intersection, network, placed_intersections
+                            )
+                            selected_intersection = None
+                            undo_timer = UNDO_WINDOW_SECONDS
+                            continue
+                        if touch_action_states["undo"] and touch_buttons["undo"].collidepoint(pos):
+                            restored = _restore_deleted_intersection(
+                                pending_undo_data,
+                                network,
+                                placed_intersections,
+                                grid_start_x,
+                                grid_start_y,
+                                CELL_SIZE,
+                            )
+                            if restored:
+                                hint_particles.append({
+                                    'text': 'U',
+                                    'color': (80, 220, 80),
+                                    'x': pending_undo_data['x'],
+                                    'y': pending_undo_data['y'],
+                                    'alpha': 255.0,
+                                    'vy': -55.0,
+                                })
+                                selected_intersection = restored
+                            else:
+                                hint_particles.append({
+                                    'text': 'X',
+                                    'color': (255, 100, 100),
+                                    'x': pending_undo_data['x'],
+                                    'y': pending_undo_data['y'],
+                                    'alpha': 255.0,
+                                    'vy': -45.0,
+                                })
+                            pending_undo_data = None
+                            undo_timer = 0.0
+                            continue
+
+                    if back_button_rect.collidepoint(pos):
+                        return True
+                    if start_button_rect.collidepoint(pos):
                         is_started = not is_started
-                        is_paused = False  # Unpause when starting
-                        spawn_timer = 0.0  # reset on both start and stop
-                    elif pause_button_hovered:
+                        is_paused = False
+                        spawn_timer = 0.0
+                        continue
+                    if pause_button_rect.collidepoint(pos):
                         if is_started and not is_paused:
                             is_paused = True
-                    else:
-                        # Check palette — start dragging a new intersection of the clicked type
+                        continue
+                    if palette_toggle_rect.collidepoint(pos):
+                        palette_open = not palette_open
+                        if palette_open:
+                            selected_intersection = None
+                        continue
+
+                    if palette_open:
+                        handled_palette_click = False
                         for i, itype in enumerate(PALETTE_TYPES):
-                            sx = palette_start_x + i * PALETTE_SLOT_W
-                            slot_rect = pygame.Rect(sx, palette_y, PALETTE_SLOT_W, PALETTE_SLOT_H)
-                            if slot_rect.collidepoint(mouse_pos):
-                                dragging_intersection = Intersection(
-                                    None, None, mouse_pos[0], mouse_pos[1],
-                                    intersection_type=itype
-                                )
-                                break
-                if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    if dragging_intersection:
-                        if dragging_intersection.snap_to_grid(
-                                grid_start_x, grid_start_y, CELL_SIZE, rows, cols):
-                            existing_key = (dragging_intersection.row, dragging_intersection.col)
-                            if existing_key in network.placed_intersections:
-                                old = network.placed_intersections[existing_key]
-                                if old in placed_intersections:
-                                    placed_intersections.remove(old)
-                            network.add_intersection(dragging_intersection)
-                            placed_intersections.append(dragging_intersection)
-                        dragging_intersection.dragging = False
-                        dragging_intersection = None
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_r and dragging_intersection:
-                        dragging_intersection.rotate()
-                    elif event.key == pygame.K_u and pending_undo_data and undo_timer > 0.0:
-                        row = pending_undo_data['row']
-                        col = pending_undo_data['col']
-                        restore_key = (row, col)
-                        if restore_key not in network.placed_intersections:
-                            restored = Intersection(
-                                row,
-                                col,
-                                grid_start_x + col * CELL_SIZE + CELL_SIZE // 2,
-                                grid_start_y + row * CELL_SIZE + CELL_SIZE // 2,
-                                intersection_type=pending_undo_data['intersection_type'],
+                            slot_rect = _palette_slot_rect(
+                                palette_panel_rect,
+                                i,
+                                PALETTE_SLOT_H,
+                                PALETTE_HEADER_H,
                             )
-                            restored.rotation = pending_undo_data['rotation']
-                            restored.snapped = True
-                            restored.snapped_row = row
-                            restored.snapped_col = col
-                            network.add_intersection(restored)
-                            placed_intersections.append(restored)
+                            if slot_rect.collidepoint(pos):
+                                handled_palette_click = True
+                                if itype in used_palette_types:
+                                    hint_particles.append({
+                                        'text': 'USED',
+                                        'color': (255, 120, 120),
+                                        'x': float(slot_rect.centerx),
+                                        'y': float(slot_rect.centery),
+                                        'alpha': 255.0,
+                                        'vy': -36.0,
+                                    })
+                                else:
+                                    dragging_intersection = Intersection(
+                                        None, None, pos[0], pos[1], intersection_type=itype
+                                    )
+                                    selected_intersection = None
+                                    palette_open = False
+                                break
+                        if handled_palette_click:
+                            continue
+
+                    if dragging_intersection and normalized["pointer"] == "touch":
+                        dragging_intersection.update_position(pos)
+                        continue
+
+                    clicked = _find_clicked_placed_intersection(placed_intersections, pos)
+                    selected_intersection = clicked
+
+                if normalized and normalized["kind"] == "up" and normalized["button"] == 1:
+                    if dragging_intersection:
+                        dragging_intersection.update_position(normalized["pos"])
+                        placed_ok = _place_dragging_intersection(
+                            dragging_intersection,
+                            network,
+                            placed_intersections,
+                            used_palette_types,
+                            grid_start_x,
+                            grid_start_y,
+                            CELL_SIZE,
+                            rows,
+                            cols,
+                        )
+                        if placed_ok:
+                            selected_intersection = dragging_intersection
+                            dragging_intersection.dragging = False
+                            dragging_intersection = None
+                        elif normalized["pointer"] == "mouse":
+                            dragging_intersection.dragging = False
+                            dragging_intersection = None
+
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_r:
+                        if dragging_intersection:
+                            dragging_intersection.rotate()
+                        elif selected_intersection:
+                            selected_intersection.rotate()
+                            network.add_intersection(selected_intersection)
+                    elif event.key == pygame.K_u and pending_undo_data and undo_timer > 0.0:
+                        restored = _restore_deleted_intersection(
+                            pending_undo_data,
+                            network,
+                            placed_intersections,
+                            grid_start_x,
+                            grid_start_y,
+                            CELL_SIZE,
+                        )
+                        if restored:
                             hint_particles.append({
-                                'text': 'U', 'color': (80, 220, 80),
-                                'x': pending_undo_data['x'], 'y': pending_undo_data['y'],
-                                'alpha': 255.0, 'vy': -55.0,
+                                'text': 'U',
+                                'color': (80, 220, 80),
+                                'x': pending_undo_data['x'],
+                                'y': pending_undo_data['y'],
+                                'alpha': 255.0,
+                                'vy': -55.0,
                             })
+                            selected_intersection = restored
                         else:
                             hint_particles.append({
-                                'text': 'X', 'color': (255, 100, 100),
-                                'x': pending_undo_data['x'], 'y': pending_undo_data['y'],
-                                'alpha': 255.0, 'vy': -45.0,
+                                'text': 'X',
+                                'color': (255, 100, 100),
+                                'x': pending_undo_data['x'],
+                                'y': pending_undo_data['y'],
+                                'alpha': 255.0,
+                                'vy': -45.0,
                             })
                         pending_undo_data = None
                         undo_timer = 0.0
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                    for placed in placed_intersections:
-                        if placed.is_clicked(mouse_pos):
-                            pending_undo_data = {
-                                'row': placed.row,
-                                'col': placed.col,
-                                'rotation': placed.rotation,
-                                'intersection_type': placed.intersection_type,
-                                'x': float(placed.x),
-                                'y': float(placed.y),
-                            }
-                            network.remove_intersection(placed)
-                            placed_intersections.remove(placed)
-                            undo_timer = UNDO_WINDOW_SECONDS
-                            break
+                    elif event.key in (pygame.K_ESCAPE, pygame.K_p):
+                        if is_started and not is_paused:
+                            is_paused = True
 
-        # Update dragging position
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                    clicked = _find_clicked_placed_intersection(placed_intersections, event.pos)
+                    if clicked:
+                        pending_undo_data = _delete_placed_intersection(clicked, network, placed_intersections)
+                        if selected_intersection == clicked:
+                            selected_intersection = None
+                        undo_timer = UNDO_WINDOW_SECONDS
+
         if dragging_intersection:
             dragging_intersection.update_position(mouse_pos)
 
-        # Update all cars only while the simulation is running
         if is_started and not is_paused:
             for car in cars:
                 car.update(dt)
 
-        # Clear screen
         screen.fill(BACKGROUND_COLOR)
-
-        # Draw clock at top; returns current game hour for rush-hour indicator
-        game_hour = draw_clock(screen, game_timer, font)
-
-        # Rush hour indicator — shown just below the clock during peak periods
+        game_hour = draw_clock(screen, game_timer, font, center=clock_anchor)
         if (7 <= game_hour < 10) or (16 <= game_hour < 19):
             rh_surf = small_font.render("RUSH HOUR", True, (255, 165, 40))
-            screen.blit(rh_surf, rh_surf.get_rect(center=(WINDOW_WIDTH // 2, 38)))
+            screen.blit(rh_surf, rh_surf.get_rect(center=rush_anchor))
 
-        # --- Score panel (bottom-right) ---
-        # Colour reflects performance: green = good, yellow = mid, red = poor
         if flow_rate >= 0.75:
             fr_color = (80, 220, 80)
         elif flow_rate >= 0.45:
@@ -1111,7 +1527,6 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
         else:
             fr_color = (255, 80, 80)
 
-        # Progress bar
         bar_w, bar_h = 130, 8
         bar_x = WINDOW_WIDTH - 10 - bar_w
         bar_y = WINDOW_HEIGHT - 14
@@ -1120,49 +1535,45 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
         if fill_w > 0:
             pygame.draw.rect(screen, fr_color, (bar_x, bar_y, fill_w, bar_h), border_radius=4)
 
-        # Flow rate text
-        fr_text = small_font.render(f"Flow Rate: {flow_rate:.2f}", True, fr_color)
+        fr_text = hud_font.render(f"Flow: {flow_rate:.2f}", True, fr_color)
         screen.blit(fr_text, fr_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 25)))
 
-        # Traffic volume
         vol = get_current_volume(selected_city, game_timer, GAME_DAY_LENGTH)
-        vol_text = small_font.render(f"Traffic: {vol} vph", True, (200, 200, 200))
+        vol_text = hud_font.render(f"Traffic: {vol}", True, (200, 200, 200))
         screen.blit(vol_text, vol_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 45)))
 
-        # Active car count
-        active_text = small_font.render(f"Active: {len(cars)}", True, (200, 200, 200))
+        active_text = hud_font.render(f"Cars: {len(cars)}", True, (200, 200, 200))
         screen.blit(active_text, active_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 65)))
 
-        # Completed cars count
-        done_text = small_font.render(f"Delivered: {len(completed_stats)}", True, (200, 200, 200))
+        done_text = hud_font.render(f"Delivered: {len(completed_stats)}", True, (200, 200, 200))
         screen.blit(done_text, done_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 85)))
 
-        # City difficulty label
-        _diff_labels = {"New York City": ("Normal", (200, 200, 200)),
-                        "Los Angeles":   ("Hard",   (255, 100, 80)),
-                        "Chicago":       ("Easy",   (80, 210, 120))}
-        diff_label, diff_color = _diff_labels.get(selected_city, ("Normal", (200, 200, 200)))
-        diff_text = small_font.render(f"Difficulty: {diff_label}", True, diff_color)
+        diff_labels = {
+            "New York City": ("Normal", (200, 200, 200)),
+            "Los Angeles": ("Hard", (255, 100, 80)),
+            "Chicago": ("Easy", (80, 210, 120)),
+        }
+        diff_label, diff_color = diff_labels.get(selected_city, ("Normal", (200, 200, 200)))
+        diff_text = hud_font.render(f"Diff: {diff_label}", True, diff_color)
         screen.blit(diff_text, diff_text.get_rect(bottomright=(WINDOW_WIDTH - 10, WINDOW_HEIGHT - 105)))
 
-        # Floating delta indicator (fades and rises after each score change)
         if delta_alpha > 0:
             sign = "+" if score_delta > 0 else ""
             delta_color = (80, 220, 80) if score_delta > 0 else (255, 80, 80)
-            delta_surf = small_font.render(f"{sign}{score_delta:.2f}", True, delta_color)
+            delta_surf = hud_font.render(f"{sign}{score_delta:.2f}", True, delta_color)
             delta_surf.set_alpha(int(delta_alpha))
             base_y = WINDOW_HEIGHT - 25
-            screen.blit(delta_surf, delta_surf.get_rect(
-                bottomright=(WINDOW_WIDTH - 10, int(base_y + delta_y_offset))))
+            screen.blit(
+                delta_surf,
+                delta_surf.get_rect(bottomright=(WINDOW_WIDTH - 10, int(base_y + delta_y_offset))),
+            )
 
         if pending_undo_data and undo_timer > 0.0 and not game_ended:
-            draw_undo_prompt(screen, small_font, undo_timer)
+            draw_undo_prompt(screen, small_font, undo_timer, anchor_x=150)
 
-        # Draw pause controls
         draw_pause_controls(screen, start_button_rect, pause_button_rect, is_paused, is_started, small_font, mouse_pos)
 
-        # Draw compact control hints and hover tooltips
-        if not game_ended:
+        if not game_ended and not browser_mode:
             draw_control_hint_strip(screen, hint_font)
             if back_button_hovered:
                 draw_button_tooltip(screen, marker_font, back_button_rect, "Back to level select")
@@ -1171,15 +1582,29 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                 draw_button_tooltip(screen, marker_font, start_button_rect, start_tip)
             elif pause_button_hovered and is_started and not is_paused:
                 draw_button_tooltip(screen, marker_font, pause_button_rect, "Pause (P/Esc)")
+            elif palette_toggle_rect.collidepoint(mouse_pos):
+                menu_tip = "Close intersection menu" if palette_open else "Open intersection menu"
+                draw_button_tooltip(screen, marker_font, palette_toggle_rect, menu_tip)
 
-        # Draw back button
         back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
         pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=10)
         back_text = small_font.render("Back", True, BUTTON_TEXT_COLOR)
-        back_text_rect = back_text.get_rect(center=back_button_rect.center)
-        screen.blit(back_text, back_text_rect)
+        screen.blit(back_text, back_text.get_rect(center=back_button_rect.center))
 
-        # Draw grid
+        draw_palette_toggle_button(screen, palette_toggle_rect, palette_open, marker_font, mouse_pos)
+        if palette_open:
+            draw_palette_menu(
+                screen,
+                palette_panel_rect,
+                PALETTE_TYPES,
+                used_palette_types,
+                PALETTE_SLOT_H,
+                PALETTE_HEADER_H,
+                marker_font,
+                mouse_pos,
+                _palette_previews,
+            )
+
         for row in range(rows):
             for col in range(cols):
                 x = grid_start_x + col * CELL_SIZE
@@ -1187,31 +1612,29 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                 pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
                 pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
 
-        # Draw placed intersections (from the network)
-        network.draw(screen)
-
-        # Draw spawn/end markers
+        network.draw(screen, highlighted_intersection=selected_intersection)
         draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
 
-        # Draw cars
         for car in cars:
             car.draw(screen)
 
-        # Update and draw hint particles
-        for p in hint_particles:
-            p['y'] += p['vy'] * dt
-            p['alpha'] = max(0.0, p['alpha'] - 255.0 * dt)
-        hint_particles = [p for p in hint_particles if p['alpha'] > 0]
-        for p in hint_particles:
-            p_surf = marker_font.render(p['text'], True, p['color'])
-            p_surf.set_alpha(int(p['alpha']))
-            screen.blit(p_surf, p_surf.get_rect(center=(int(p['x']), int(p['y']))))
+        for particle in hint_particles:
+            particle['y'] += particle['vy'] * dt
+            particle['alpha'] = max(0.0, particle['alpha'] - 255.0 * dt)
+        hint_particles = [particle for particle in hint_particles if particle['alpha'] > 0]
+        for particle in hint_particles:
+            particle_surf = marker_font.render(particle['text'], True, particle['color'])
+            particle_surf.set_alpha(int(particle['alpha']))
+            screen.blit(
+                particle_surf,
+                particle_surf.get_rect(center=(int(particle['x']), int(particle['y']))),
+            )
 
-        # Draw palette and any intersection being dragged
-        draw_palette(screen, PALETTE_TYPES, palette_start_x, palette_y,
-                     PALETTE_SLOT_W, PALETTE_SLOT_H, small_font, mouse_pos, _palette_previews)
         if dragging_intersection:
             dragging_intersection.draw(screen)
+
+        if browser_mode and not game_ended:
+            draw_touch_toolbar(screen, touch_font, mouse_pos, touch_action_states)
 
         if game_ended:
             level_passed = flow_rate >= level_target
@@ -1239,11 +1662,23 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                 small_font,
                 mouse_pos,
             )
+
             for event in pygame.event.get():
+                normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
+                if normalized and normalized["pointer"] == "touch":
+                    last_touch_event_ms = pygame.time.get_ticks()
+                elif normalized and browser_mode and normalized["pointer"] == "mouse":
+                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                        normalized = None
+
+                if normalized:
+                    mouse_pos = normalized["pos"]
+                    pointer_pos = mouse_pos
+
                 if event.type == pygame.QUIT:
                     return False
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    pos = pygame.mouse.get_pos()
+                if normalized and normalized["kind"] == "down" and normalized["button"] == 1:
+                    pos = normalized["pos"]
                     if again_rect.collidepoint(pos):
                         return "REPLAY"
                     if next_rect and next_rect.collidepoint(pos):
@@ -1251,18 +1686,22 @@ def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                     if menu_rect.collidepoint(pos):
                         return True
 
-        # Update display
         pygame.display.flip()
+        await asyncio.sleep(0)
 
-    return True  # Return to menu
+    return True
 
-def main():
-    """Main function managing game states"""
+
+async def async_main():
+    """Main function managing menu, level-select, and gameplay states."""
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("City Limits")
 
     font = pygame.font.Font(None, 36)
     title_font = pygame.font.Font(None, 72)
+    frame_clock = pygame.time.Clock()
+    browser_mode = is_browser_runtime()
+    last_touch_event_ms = -1000
 
     current_state = STATE_MENU
     selected_city = None
@@ -1272,26 +1711,43 @@ def main():
 
     running = True
     while running:
+        frame_clock.tick(60)
+
         if current_state == STATE_MENU:
-            # Draw menu and get button rects
-            city_buttons = draw_menu(screen, font, title_font)
+            all_unlocked = all(level >= MAX_LEVEL for level in unlocked_levels.values())
+            city_buttons, unlock_button = draw_menu(
+                screen,
+                font,
+                title_font,
+                all_unlocked=all_unlocked,
+            )
 
             for event in pygame.event.get():
+                normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
+                if normalized and normalized["pointer"] == "touch":
+                    last_touch_event_ms = pygame.time.get_ticks()
+                elif normalized and browser_mode and normalized["pointer"] == "mouse":
+                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                        normalized = None
+
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pos = pygame.mouse.get_pos()
-                    # Check which city button was clicked
+                elif normalized and normalized["kind"] == "down" and normalized["button"] == 1:
+                    pos = normalized["pos"]
+                    if unlock_button.collidepoint(pos):
+                        for city in city_names:
+                            unlocked_levels[city] = MAX_LEVEL
+                        continue
                     for i, button in enumerate(city_buttons):
-                        if button.collidepoint(mouse_pos):
+                        if button.collidepoint(pos):
                             selected_city = city_names[i]
                             current_state = STATE_LEVEL_SELECT
                             break
 
             pygame.display.flip()
+            await asyncio.sleep(0)
 
         elif current_state == STATE_LEVEL_SELECT:
-            # Draw level selection menu
             max_unlocked_level = unlocked_levels.get(selected_city, 1)
             level_buttons, back_button = draw_level_menu(
                 screen,
@@ -1302,28 +1758,34 @@ def main():
             )
 
             for event in pygame.event.get():
+                normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
+                if normalized and normalized["pointer"] == "touch":
+                    last_touch_event_ms = pygame.time.get_ticks()
+                elif normalized and browser_mode and normalized["pointer"] == "mouse":
+                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                        normalized = None
+
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pos = pygame.mouse.get_pos()
-                    # Check if back button was clicked
-                    if back_button.collidepoint(mouse_pos):
+                elif normalized and normalized["kind"] == "down" and normalized["button"] == 1:
+                    pos = normalized["pos"]
+                    if back_button.collidepoint(pos):
                         current_state = STATE_MENU
                     else:
-                        # Check which level button was clicked
                         for i, button in enumerate(level_buttons):
                             level_num = i + 1
-                            if button.collidepoint(mouse_pos) and level_num <= max_unlocked_level:
-                                selected_level = i + 1  # Levels 1, 2, 3
+                            if button.collidepoint(pos) and level_num <= max_unlocked_level:
+                                selected_level = level_num
                                 current_state = STATE_GAME
                                 break
 
             pygame.display.flip()
+            await asyncio.sleep(0)
 
         elif current_state == STATE_GAME:
-            result = run_game(screen, selected_city, selected_level, unlocked_levels)
+            result = await run_game(screen, selected_city, selected_level, unlocked_levels)
             while result == "REPLAY":
-                result = run_game(screen, selected_city, selected_level, unlocked_levels)
+                result = await run_game(screen, selected_city, selected_level, unlocked_levels)
             if result == "NEXT_LEVEL":
                 selected_level = min(MAX_LEVEL, selected_level + 1)
                 current_state = STATE_GAME
@@ -1333,7 +1795,13 @@ def main():
                 running = False
 
     pygame.quit()
-    sys.exit()
+    raise SystemExit
+
+
+def main():
+    """Launch the game on desktop or in the browser."""
+    asyncio.run(async_main())
+
 
 if __name__ == "__main__":
     main()
