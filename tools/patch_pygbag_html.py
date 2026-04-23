@@ -40,7 +40,8 @@ ORIENTATION_HINT_SCRIPT = """
     setTimeout(update_orientation_hint, 0);
     </script>
 """
-FALLBACK_BROWSERFS_SRC = "https://pygame-web.github.io/cdn/0.9.3//browserfs.min.js"
+FALLBACK_BROWSERFS_SRC = "https://cdn.jsdelivr.net/npm/browserfs@1.4.3/dist/browserfs.min.js"
+BROWSERFS_SCRIPT_RE = re.compile(r'<script src="[^"]*browserfs(?:\.min)?\.js"></script>')
 
 
 def patch_pygbag_html(raw_html: str, width: int, height: int) -> str:
@@ -48,22 +49,13 @@ def patch_pygbag_html(raw_html: str, width: int, height: int) -> str:
     aspect_ratio = width / height
     html = raw_html
 
-    browserfs_match = re.search(r'<script src="([^"]*browserfs\.min\.js)"></script>', html)
-    pythons_match = re.search(r'<script src="([^"]*?)pythons\.js"', html)
-    browserfs_src = FALLBACK_BROWSERFS_SRC
-    if browserfs_match:
-        browserfs_src = browserfs_match.group(1)
-    elif pythons_match:
-        browserfs_src = f"{pythons_match.group(1)}browserfs.min.js"
-
-    browserfs_tag = f'<script src="{browserfs_src}"></script>'
-    pythons_index = html.find("pythons.js")
-    browserfs_index = html.find("browserfs.min.js")
-    if browserfs_index == -1 or (pythons_index != -1 and browserfs_index > pythons_index):
+    html = BROWSERFS_SCRIPT_RE.sub("", html)
+    browserfs_tag = f'<script src="{FALLBACK_BROWSERFS_SRC}"></script>'
+    if browserfs_tag not in html:
         if "<html" in html:
             html = re.sub(r"(<html[^>]*>)", r"\1" + browserfs_tag, html, count=1)
         else:
-            html = f"{browserfs_tag}\n{html}"
+            html = f"{browserfs_tag}\n{html.lstrip('\n')}"
 
     html = html.replace(
         'platform.document.body.style.background = "#7f7f7f"',

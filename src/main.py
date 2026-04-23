@@ -87,10 +87,26 @@ def normalize_pointer_event(event, screen_width=WINDOW_WIDTH, screen_height=WIND
     return None
 
 
+def is_duplicate_pointer_down(normalized, previous_down, now_ms, max_age_ms=400, max_distance=24):
+    """Return True when a browser mouse/touch down is the mirrored twin of the last tap."""
+    if not normalized or normalized["kind"] != "down" or normalized["button"] != 1:
+        return False
+    if previous_down is None or normalized["pointer"] == previous_down["pointer"]:
+        return False
+    if now_ms - previous_down["time_ms"] > max_age_ms:
+        return False
+
+    dx = normalized["pos"][0] - previous_down["pos"][0]
+    dy = normalized["pos"][1] - previous_down["pos"][1]
+    return dx * dx + dy * dy <= max_distance * max_distance
+
+
 def get_touch_toolbar_button_rects(window_width=WINDOW_WIDTH, window_height=WINDOW_HEIGHT):
     """Return the fixed browser touch toolbar button layout."""
-    button_width = 150
-    button_height = 54
+    side_margin = 20
+    gap = 12
+    button_width = min(190, max(110, (window_width - side_margin * 2 - gap * (len(TOUCH_ACTION_ORDER) - 1)) // len(TOUCH_ACTION_ORDER)))
+    button_height = 62
     gap = 12
     total_width = button_width * len(TOUCH_ACTION_ORDER) + gap * (len(TOUCH_ACTION_ORDER) - 1)
     start_x = (window_width - total_width) // 2
@@ -116,6 +132,90 @@ def get_touch_action_states(has_dragging, has_selected, can_undo):
         "delete": has_selected and not has_dragging,
         "undo": bool(can_undo),
     }
+
+
+def get_browser_control_rects(window_width=WINDOW_WIDTH, window_height=WINDOW_HEIGHT):
+    """Return larger browser-only hit targets for the core controls."""
+    margin = 18
+    top = 18
+    small_width = 128
+    small_height = 56
+    start_width = 156
+    start_height = 60
+    palette_width = 200
+
+    return {
+        "back": pygame.Rect(margin, top, small_width, small_height),
+        "start": pygame.Rect((window_width - start_width) // 2, top, start_width, start_height),
+        "pause": pygame.Rect(window_width - margin - small_width, top, small_width, small_height),
+        "palette_toggle": pygame.Rect(20, window_height // 2 - small_height // 2, palette_width, small_height),
+    }
+
+
+def get_touch_palette_overlay_slot_rects(window_width=WINDOW_WIDTH, window_height=WINDOW_HEIGHT, slot_count=8):
+    """Return large tap-friendly slot rects for the browser palette overlay."""
+    cols = 2
+    top = 86
+    side_margin = 28
+    header_height = 44
+    padding = 12
+    gap = 10
+    slot_height = 68
+    panel_width = window_width - side_margin * 2
+    slot_width = (panel_width - padding * 2 - gap) // cols
+
+    slots = []
+    for index in range(slot_count):
+        row = index // cols
+        col = index % cols
+        x = side_margin + padding + col * (slot_width + gap)
+        y = top + header_height + padding + row * (slot_height + gap)
+        slots.append(pygame.Rect(x, y, slot_width, slot_height))
+    return slots
+
+
+def get_touch_palette_overlay_rect(window_width=WINDOW_WIDTH, window_height=WINDOW_HEIGHT, slot_count=8):
+    """Return the outer bounds of the browser palette overlay."""
+    slots = get_touch_palette_overlay_slot_rects(window_width, window_height, slot_count=slot_count)
+    if not slots:
+        return pygame.Rect(28, 86, window_width - 56, 120)
+
+    left = min(slot.left for slot in slots) - 12
+    right = max(slot.right for slot in slots) + 12
+    top = 86
+    bottom = max(slot.bottom for slot in slots) + 12
+    return pygame.Rect(left, top, right - left, bottom - top)
+
+
+def find_grid_cell_at_pos(pos, start_x, start_y, cell_size, rows, cols):
+    """Map a screen position to a grid cell, or return None when outside the grid."""
+    rel_x = pos[0] - start_x
+    rel_y = pos[1] - start_y
+
+    if rel_x < 0 or rel_y < 0:
+        return None
+
+    col = int(rel_x / cell_size)
+    row = int(rel_y / cell_size)
+
+    if 0 <= row < rows and 0 <= col < cols:
+        return row, col
+    return None
+
+
+def build_intersection_for_cell(row, col, start_x, start_y, cell_size, intersection_type):
+    """Create a snapped intersection centered in a specific grid cell."""
+    placed = Intersection(
+        row,
+        col,
+        start_x + col * cell_size + cell_size // 2,
+        start_y + row * cell_size + cell_size // 2,
+        intersection_type=intersection_type,
+    )
+    placed.snapped = True
+    placed.snapped_row = row
+    placed.snapped_col = col
+    return placed
 
 def calculate_flow_rate(completed_stats, spawn_attempts=0, spawn_successes=0):
     """Compute flow rate using the equation from the README:
@@ -462,14 +562,15 @@ def wrap_text_lines(text, font, max_width):
     return lines
 
 
-def draw_intro_overlay(screen, font, small_font, mouse_pos):
+def draw_intro_overlay(screen, font, small_font, mouse_pos, touch_mode=False):
     """Draw the first-time tutorial card. Returns got_it_rect."""
     overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
     overlay.set_alpha(210)
     overlay.fill((0, 0, 0))
     screen.blit(overlay, (0, 0))
 
-    pw, ph = 540, 290
+    pw = 600 if touch_mode else 540
+    ph = 320 if touch_mode else 290
     px = (WINDOW_WIDTH - pw) // 2
     py = (WINDOW_HEIGHT - ph) // 2
     pygame.draw.rect(screen, (40, 40, 40), (px, py, pw, ph), border_radius=12)
@@ -501,7 +602,7 @@ def draw_intro_overlay(screen, font, small_font, mouse_pos):
             s_line = small_font.render(line, True, (180, 180, 180))
             screen.blit(s_line, s_line.get_rect(centerx=cx, top=py + 176 + line_index * 20))
 
-    bw, bh = 220, 44
+    bw, bh = (260, 56) if touch_mode else (220, 44)
     got_it_rect = pygame.Rect((WINDOW_WIDTH - bw) // 2, py + ph - 62, bw, bh)
     hov = got_it_rect.collidepoint(mouse_pos)
     pygame.draw.rect(screen, BUTTON_HOVER_COLOR if hov else BUTTON_COLOR, got_it_rect, border_radius=10)
@@ -557,20 +658,26 @@ def draw_spawn_markers(screen, markers, font, label_alpha=255):
         screen.blit(tag_surf, tag_surf.get_rect(center=tag_center))
 
 
-def draw_menu(screen, font, title_font, all_unlocked=False):
+def draw_menu(screen, font, title_font, all_unlocked=False, touch_mode=False):
     """Draw the main menu with city selection"""
     screen.fill(BACKGROUND_COLOR)
 
     # Title
     title = title_font.render("City Limits", True, (255, 255, 255))
-    title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 100))
+    title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 96 if touch_mode else 100))
     screen.blit(title, title_rect)
 
     # City buttons
-    button_width = 300
-    button_height = 60
-    button_spacing = 80
-    start_y = 250
+    if touch_mode:
+        button_width = 380
+        button_height = 84
+        button_spacing = 94
+        start_y = 210
+    else:
+        button_width = 300
+        button_height = 60
+        button_spacing = 80
+        start_y = 250
 
     city_names = ["New York City", "Los Angeles", "Chicago"]
     buttons = []
@@ -601,7 +708,7 @@ def draw_menu(screen, font, title_font, all_unlocked=False):
 
     # Small utility button for quickly unlocking all levels.
     small_font = pygame.font.Font(None, 24)
-    unlock_w, unlock_h = 126, 32
+    unlock_w, unlock_h = (150, 42) if touch_mode else (126, 32)
     unlock_button_rect = pygame.Rect(WINDOW_WIDTH - unlock_w - 14, 14, unlock_w, unlock_h)
     unlock_hovered = unlock_button_rect.collidepoint(mouse_pos)
 
@@ -621,13 +728,13 @@ def draw_menu(screen, font, title_font, all_unlocked=False):
 
     return buttons, unlock_button_rect
 
-def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=1):
+def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=1, touch_mode=False):
     """Draw the level selection menu for the selected city"""
     screen.fill(BACKGROUND_COLOR)
 
     # Title
     title = title_font.render(selected_city, True, (255, 255, 255))
-    title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 80))
+    title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 82 if touch_mode else 80))
     screen.blit(title, title_rect)
 
     # Subtitle
@@ -641,10 +748,16 @@ def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=
     screen.blit(unlocked_text, unlocked_text_rect)
 
     # Level buttons
-    button_width = 200
-    button_height = 60
-    button_spacing = 80
-    start_y = 230
+    if touch_mode:
+        button_width = 280
+        button_height = 82
+        button_spacing = 92
+        start_y = 220
+    else:
+        button_width = 200
+        button_height = 60
+        button_spacing = 80
+        start_y = 230
 
     level_names = ["1", "2", "3"]
     buttons = []
@@ -689,7 +802,7 @@ def draw_level_menu(screen, font, title_font, selected_city, max_unlocked_level=
         buttons.append(button_rect)
 
     # Back button
-    back_button_rect = pygame.Rect(20, 20, 150, 40)
+    back_button_rect = pygame.Rect(20, 20, 170 if touch_mode else 150, 52 if touch_mode else 40)
     back_button_hovered = back_button_rect.collidepoint(mouse_pos)
     back_button_color = BUTTON_HOVER_COLOR if back_button_hovered else BUTTON_COLOR
     pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=10)
@@ -770,12 +883,18 @@ def _palette_slot_rect(panel_rect, index, slot_h, header_h, margin=10):
     )
 
 
-def draw_palette_toggle_button(screen, button_rect, is_open, small_font, mouse_pos):
+def draw_palette_toggle_button(screen, button_rect, is_open, small_font, mouse_pos, pending_type=None):
     """Draw the left-side button that toggles the intersection menu."""
     hovered = button_rect.collidepoint(mouse_pos)
     color = BUTTON_HOVER_COLOR if hovered else BUTTON_COLOR
     pygame.draw.rect(screen, color, button_rect, border_radius=10)
-    label = "Close Menu" if is_open else "Intersections"
+    if is_open:
+        label = "Close Menu"
+    elif pending_type is not None:
+        short_label = pending_type.value if len(pending_type.value) <= 12 else pending_type.value.split()[0]
+        label = f"Place {short_label}"
+    else:
+        label = "Intersections"
     text = small_font.render(label, True, BUTTON_TEXT_COLOR)
     screen.blit(text, text.get_rect(center=button_rect.center))
 
@@ -826,6 +945,63 @@ def draw_palette_menu(screen, panel_rect, palette_types, used_types,
         if used:
             used_surf = label_font.render("USED", True, (255, 120, 120))
             screen.blit(used_surf, used_surf.get_rect(midright=(slot_rect.right - 8, slot_rect.centery)))
+
+
+def draw_touch_palette_overlay(screen, palette_types, used_types, label_font, mouse_pos,
+                               preview_cache=None, selected_type=None):
+    """Draw a large tap-first palette overlay for the browser build."""
+    dimmer = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+    dimmer.fill((0, 0, 0, 145))
+    screen.blit(dimmer, (0, 0))
+
+    panel_rect = get_touch_palette_overlay_rect(WINDOW_WIDTH, WINDOW_HEIGHT, slot_count=len(palette_types))
+    pygame.draw.rect(screen, (28, 28, 28), panel_rect, border_radius=18)
+    pygame.draw.rect(screen, (105, 105, 105), panel_rect, 2, border_radius=18)
+
+    title = label_font.render("Intersection Library", True, (235, 235, 235))
+    subtitle_font = pygame.font.Font(None, 24)
+    subtitle = subtitle_font.render("Tap a card, then tap a grid cell to place it.", True, (185, 185, 185))
+    screen.blit(title, title.get_rect(x=panel_rect.x + 16, y=panel_rect.y + 10))
+    screen.blit(subtitle, subtitle.get_rect(x=panel_rect.x + 16, y=panel_rect.y + 42))
+
+    slot_rects = get_touch_palette_overlay_slot_rects(WINDOW_WIDTH, WINDOW_HEIGHT, slot_count=len(palette_types))
+    for slot_rect, itype in zip(slot_rects, palette_types):
+        used = itype in used_types
+        selected = selected_type == itype and not used
+        hovered = slot_rect.collidepoint(mouse_pos) and not used
+
+        if used:
+            bg = (44, 44, 44)
+            border = (82, 82, 82)
+            text_color = (145, 145, 145)
+        elif selected:
+            bg = (82, 120, 168)
+            border = (210, 230, 250)
+            text_color = BUTTON_TEXT_COLOR
+        else:
+            bg = (74, 74, 74) if hovered else (58, 58, 58)
+            border = (130, 130, 130)
+            text_color = (230, 230, 230)
+
+        pygame.draw.rect(screen, bg, slot_rect, border_radius=12)
+        pygame.draw.rect(screen, border, slot_rect, 2, border_radius=12)
+
+        icon_x = slot_rect.x + 34
+        icon_y = slot_rect.centery
+        if preview_cache and itype in preview_cache:
+            preview = preview_cache[itype]
+            preview.x = icon_x
+            preview.y = icon_y
+            preview.draw(screen)
+        else:
+            Intersection(None, None, icon_x, icon_y, intersection_type=itype).draw(screen)
+
+        label = label_font.render(itype.value, True, text_color)
+        screen.blit(label, label.get_rect(midleft=(slot_rect.x + 68, slot_rect.centery)))
+
+        if used:
+            used_surf = label_font.render("USED", True, (255, 120, 120))
+            screen.blit(used_surf, used_surf.get_rect(midright=(slot_rect.right - 14, slot_rect.centery)))
 
 
 def _find_clicked_placed_intersection(placed_intersections, pos):
@@ -1006,6 +1182,7 @@ def draw_end_screen(screen, flow_rate, delivered, city, level, target_flow, pass
 async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     """Run the game for the selected city."""
     pygame.display.set_caption(f"City Limits - {selected_city} - Level {selected_level}")
+    browser_mode = is_browser_runtime()
 
     grid_configs = {
         1: (1, 3),
@@ -1022,9 +1199,17 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     starts = [m for m in spawn_markers if m['type'] == 'start']
     ends = [m for m in spawn_markers if m['type'] == 'end']
 
-    back_button_rect = pygame.Rect(20, 20, 100, 40)
-    start_button_rect = pygame.Rect(130, 20, 100, 40)
-    pause_button_rect = pygame.Rect(WINDOW_WIDTH - 100, 20, 100, 40)
+    if browser_mode:
+        browser_controls = get_browser_control_rects(WINDOW_WIDTH, WINDOW_HEIGHT)
+        back_button_rect = browser_controls["back"]
+        start_button_rect = browser_controls["start"]
+        pause_button_rect = browser_controls["pause"]
+        palette_toggle_rect = browser_controls["palette_toggle"]
+    else:
+        back_button_rect = pygame.Rect(20, 20, 100, 40)
+        start_button_rect = pygame.Rect(130, 20, 100, 40)
+        pause_button_rect = pygame.Rect(WINDOW_WIDTH - 100, 20, 100, 40)
+        palette_toggle_rect = pygame.Rect(20, WINDOW_HEIGHT // 2 - 22, 160, 44)
     clock_anchor = (WINDOW_WIDTH // 2, 20)
     rush_anchor = (260, 38)
     font = pygame.font.Font(None, 36)
@@ -1047,7 +1232,6 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     PALETTE_SLOT_H = 58
     PALETTE_HEADER_H = 34
     PALETTE_PANEL_W = 220
-    palette_toggle_rect = pygame.Rect(20, WINDOW_HEIGHT // 2 - 22, 160, 44)
     palette_panel_rect = pygame.Rect(
         20,
         72,
@@ -1056,6 +1240,7 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     )
     palette_open = False
     used_palette_types = set()
+    touch_palette_selection = None
 
     _palette_previews = {
         itype: Intersection(None, None, 0, 0, intersection_type=itype)
@@ -1097,9 +1282,8 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
     undo_timer = 0.0
     title_font = pygame.font.Font(None, 72)
 
-    browser_mode = is_browser_runtime()
     pointer_pos = pygame.mouse.get_pos()
-    last_touch_event_ms = -1000
+    recent_pointer_down = None
 
     running = True
     while running:
@@ -1159,19 +1343,37 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
             for car in cars:
                 car.draw(screen)
 
-            draw_palette_toggle_button(screen, palette_toggle_rect, palette_open, marker_font, mouse_pos)
+            draw_palette_toggle_button(
+                screen,
+                palette_toggle_rect,
+                palette_open,
+                marker_font,
+                mouse_pos,
+                pending_type=touch_palette_selection,
+            )
             if palette_open:
-                draw_palette_menu(
-                    screen,
-                    palette_panel_rect,
-                    PALETTE_TYPES,
-                    used_palette_types,
-                    PALETTE_SLOT_H,
-                    PALETTE_HEADER_H,
-                    marker_font,
-                    mouse_pos,
-                    _palette_previews,
-                )
+                if browser_mode:
+                    draw_touch_palette_overlay(
+                        screen,
+                        PALETTE_TYPES,
+                        used_palette_types,
+                        marker_font,
+                        mouse_pos,
+                        _palette_previews,
+                        selected_type=touch_palette_selection,
+                    )
+                else:
+                    draw_palette_menu(
+                        screen,
+                        palette_panel_rect,
+                        PALETTE_TYPES,
+                        used_palette_types,
+                        PALETTE_SLOT_H,
+                        PALETTE_HEADER_H,
+                        marker_font,
+                        mouse_pos,
+                        _palette_previews,
+                    )
 
             resume_r, restart_r, menu_r, conf = draw_pause_overlay(
                 screen, selected_city, selected_level, font, small_font, mouse_pos, pause_confirm_exit
@@ -1179,11 +1381,16 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
 
             for event in pygame.event.get():
                 normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
-                if normalized and normalized["pointer"] == "touch":
-                    last_touch_event_ms = pygame.time.get_ticks()
-                elif normalized and browser_mode and normalized["pointer"] == "mouse":
-                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                if normalized and browser_mode and normalized["kind"] == "down" and normalized["button"] == 1:
+                    now_ms = pygame.time.get_ticks()
+                    if is_duplicate_pointer_down(normalized, recent_pointer_down, now_ms):
                         normalized = None
+                    else:
+                        recent_pointer_down = {
+                            "pointer": normalized["pointer"],
+                            "pos": normalized["pos"],
+                            "time_ms": now_ms,
+                        }
 
                 if normalized:
                     mouse_pos = normalized["pos"]
@@ -1223,15 +1430,20 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                     pygame.draw.rect(screen, CELL_COLOR, (x, y, CELL_SIZE, CELL_SIZE))
                     pygame.draw.rect(screen, GRID_COLOR, (x, y, CELL_SIZE, CELL_SIZE), 3)
             draw_spawn_markers(screen, spawn_markers, marker_font, label_alpha)
-            got_it_rect = draw_intro_overlay(screen, font, small_font, mouse_pos)
+            got_it_rect = draw_intro_overlay(screen, font, small_font, mouse_pos, touch_mode=browser_mode)
 
             for event in pygame.event.get():
                 normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
-                if normalized and normalized["pointer"] == "touch":
-                    last_touch_event_ms = pygame.time.get_ticks()
-                elif normalized and browser_mode and normalized["pointer"] == "mouse":
-                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                if normalized and browser_mode and normalized["kind"] == "down" and normalized["button"] == 1:
+                    now_ms = pygame.time.get_ticks()
+                    if is_duplicate_pointer_down(normalized, recent_pointer_down, now_ms):
                         normalized = None
+                    else:
+                        recent_pointer_down = {
+                            "pointer": normalized["pointer"],
+                            "pos": normalized["pos"],
+                            "time_ms": now_ms,
+                        }
 
                 if normalized:
                     mouse_pos = normalized["pos"]
@@ -1318,11 +1530,16 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
         if not game_ended:
             for event in pygame.event.get():
                 normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
-                if normalized and normalized["pointer"] == "touch":
-                    last_touch_event_ms = pygame.time.get_ticks()
-                elif normalized and browser_mode and normalized["pointer"] == "mouse":
-                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                if normalized and browser_mode and normalized["kind"] == "down" and normalized["button"] == 1:
+                    now_ms = pygame.time.get_ticks()
+                    if is_duplicate_pointer_down(normalized, recent_pointer_down, now_ms):
                         normalized = None
+                    else:
+                        recent_pointer_down = {
+                            "pointer": normalized["pointer"],
+                            "pos": normalized["pos"],
+                            "time_ms": now_ms,
+                        }
 
                 if normalized:
                     mouse_pos = normalized["pos"]
@@ -1397,36 +1614,108 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
                         palette_open = not palette_open
                         if palette_open:
                             selected_intersection = None
+                            touch_palette_selection = None
                         continue
 
                     if palette_open:
                         handled_palette_click = False
-                        for i, itype in enumerate(PALETTE_TYPES):
-                            slot_rect = _palette_slot_rect(
-                                palette_panel_rect,
-                                i,
-                                PALETTE_SLOT_H,
-                                PALETTE_HEADER_H,
+                        if browser_mode:
+                            palette_overlay_rect = get_touch_palette_overlay_rect(
+                                WINDOW_WIDTH,
+                                WINDOW_HEIGHT,
+                                slot_count=len(PALETTE_TYPES),
                             )
-                            if slot_rect.collidepoint(pos):
-                                handled_palette_click = True
-                                if itype in used_palette_types:
-                                    hint_particles.append({
-                                        'text': 'USED',
-                                        'color': (255, 120, 120),
-                                        'x': float(slot_rect.centerx),
-                                        'y': float(slot_rect.centery),
-                                        'alpha': 255.0,
-                                        'vy': -36.0,
-                                    })
-                                else:
-                                    dragging_intersection = Intersection(
-                                        None, None, pos[0], pos[1], intersection_type=itype
-                                    )
-                                    selected_intersection = None
-                                    palette_open = False
-                                break
+                            slot_rects = get_touch_palette_overlay_slot_rects(
+                                WINDOW_WIDTH,
+                                WINDOW_HEIGHT,
+                                slot_count=len(PALETTE_TYPES),
+                            )
+                            for slot_rect, itype in zip(slot_rects, PALETTE_TYPES):
+                                if slot_rect.collidepoint(pos):
+                                    handled_palette_click = True
+                                    if itype in used_palette_types:
+                                        hint_particles.append({
+                                            'text': 'USED',
+                                            'color': (255, 120, 120),
+                                            'x': float(slot_rect.centerx),
+                                            'y': float(slot_rect.centery),
+                                            'alpha': 255.0,
+                                            'vy': -36.0,
+                                        })
+                                    else:
+                                        touch_palette_selection = itype
+                                        selected_intersection = None
+                                        palette_open = False
+                                    break
+                            if not handled_palette_click and not palette_overlay_rect.collidepoint(pos):
+                                palette_open = False
+                                continue
+                        else:
+                            for i, itype in enumerate(PALETTE_TYPES):
+                                slot_rect = _palette_slot_rect(
+                                    palette_panel_rect,
+                                    i,
+                                    PALETTE_SLOT_H,
+                                    PALETTE_HEADER_H,
+                                )
+                                if slot_rect.collidepoint(pos):
+                                    handled_palette_click = True
+                                    if itype in used_palette_types:
+                                        hint_particles.append({
+                                            'text': 'USED',
+                                            'color': (255, 120, 120),
+                                            'x': float(slot_rect.centerx),
+                                            'y': float(slot_rect.centery),
+                                            'alpha': 255.0,
+                                            'vy': -36.0,
+                                        })
+                                    else:
+                                        dragging_intersection = Intersection(
+                                            None, None, pos[0], pos[1], intersection_type=itype
+                                        )
+                                        selected_intersection = None
+                                        palette_open = False
+                                    break
                         if handled_palette_click:
+                            continue
+
+                    if browser_mode:
+                        tapped_cell = find_grid_cell_at_pos(
+                            pos,
+                            grid_start_x,
+                            grid_start_y,
+                            CELL_SIZE,
+                            rows,
+                            cols,
+                        )
+                        if touch_palette_selection and tapped_cell is not None:
+                            row, col = tapped_cell
+                            tapped_intersection = build_intersection_for_cell(
+                                row,
+                                col,
+                                grid_start_x,
+                                grid_start_y,
+                                CELL_SIZE,
+                                touch_palette_selection,
+                            )
+                            placed_ok = _place_dragging_intersection(
+                                tapped_intersection,
+                                network,
+                                placed_intersections,
+                                used_palette_types,
+                                grid_start_x,
+                                grid_start_y,
+                                CELL_SIZE,
+                                rows,
+                                cols,
+                            )
+                            if placed_ok:
+                                selected_intersection = tapped_intersection
+                                touch_palette_selection = None
+                            continue
+
+                        if tapped_cell is not None:
+                            selected_intersection = network.get_intersection(*tapped_cell)
                             continue
 
                     if dragging_intersection and normalized["pointer"] == "touch":
@@ -1591,19 +1880,37 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
         back_text = small_font.render("Back", True, BUTTON_TEXT_COLOR)
         screen.blit(back_text, back_text.get_rect(center=back_button_rect.center))
 
-        draw_palette_toggle_button(screen, palette_toggle_rect, palette_open, marker_font, mouse_pos)
+        draw_palette_toggle_button(
+            screen,
+            palette_toggle_rect,
+            palette_open,
+            marker_font,
+            mouse_pos,
+            pending_type=touch_palette_selection,
+        )
         if palette_open:
-            draw_palette_menu(
-                screen,
-                palette_panel_rect,
-                PALETTE_TYPES,
-                used_palette_types,
-                PALETTE_SLOT_H,
-                PALETTE_HEADER_H,
-                marker_font,
-                mouse_pos,
-                _palette_previews,
-            )
+            if browser_mode:
+                draw_touch_palette_overlay(
+                    screen,
+                    PALETTE_TYPES,
+                    used_palette_types,
+                    marker_font,
+                    mouse_pos,
+                    _palette_previews,
+                    selected_type=touch_palette_selection,
+                )
+            else:
+                draw_palette_menu(
+                    screen,
+                    palette_panel_rect,
+                    PALETTE_TYPES,
+                    used_palette_types,
+                    PALETTE_SLOT_H,
+                    PALETTE_HEADER_H,
+                    marker_font,
+                    mouse_pos,
+                    _palette_previews,
+                )
 
         for row in range(rows):
             for col in range(cols):
@@ -1665,11 +1972,16 @@ async def run_game(screen, selected_city, selected_level, unlocked_levels=None):
 
             for event in pygame.event.get():
                 normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
-                if normalized and normalized["pointer"] == "touch":
-                    last_touch_event_ms = pygame.time.get_ticks()
-                elif normalized and browser_mode and normalized["pointer"] == "mouse":
-                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                if normalized and browser_mode and normalized["kind"] == "down" and normalized["button"] == 1:
+                    now_ms = pygame.time.get_ticks()
+                    if is_duplicate_pointer_down(normalized, recent_pointer_down, now_ms):
                         normalized = None
+                    else:
+                        recent_pointer_down = {
+                            "pointer": normalized["pointer"],
+                            "pos": normalized["pos"],
+                            "time_ms": now_ms,
+                        }
 
                 if normalized:
                     mouse_pos = normalized["pos"]
@@ -1701,7 +2013,7 @@ async def async_main():
     title_font = pygame.font.Font(None, 72)
     frame_clock = pygame.time.Clock()
     browser_mode = is_browser_runtime()
-    last_touch_event_ms = -1000
+    recent_pointer_down = None
 
     current_state = STATE_MENU
     selected_city = None
@@ -1720,15 +2032,21 @@ async def async_main():
                 font,
                 title_font,
                 all_unlocked=all_unlocked,
+                touch_mode=browser_mode,
             )
 
             for event in pygame.event.get():
                 normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
-                if normalized and normalized["pointer"] == "touch":
-                    last_touch_event_ms = pygame.time.get_ticks()
-                elif normalized and browser_mode and normalized["pointer"] == "mouse":
-                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                if normalized and browser_mode and normalized["kind"] == "down" and normalized["button"] == 1:
+                    now_ms = pygame.time.get_ticks()
+                    if is_duplicate_pointer_down(normalized, recent_pointer_down, now_ms):
                         normalized = None
+                    else:
+                        recent_pointer_down = {
+                            "pointer": normalized["pointer"],
+                            "pos": normalized["pos"],
+                            "time_ms": now_ms,
+                        }
 
                 if event.type == pygame.QUIT:
                     running = False
@@ -1755,15 +2073,21 @@ async def async_main():
                 title_font,
                 selected_city,
                 max_unlocked_level=max_unlocked_level,
+                touch_mode=browser_mode,
             )
 
             for event in pygame.event.get():
                 normalized = normalize_pointer_event(event, WINDOW_WIDTH, WINDOW_HEIGHT)
-                if normalized and normalized["pointer"] == "touch":
-                    last_touch_event_ms = pygame.time.get_ticks()
-                elif normalized and browser_mode and normalized["pointer"] == "mouse":
-                    if pygame.time.get_ticks() - last_touch_event_ms < 250:
+                if normalized and browser_mode and normalized["kind"] == "down" and normalized["button"] == 1:
+                    now_ms = pygame.time.get_ticks()
+                    if is_duplicate_pointer_down(normalized, recent_pointer_down, now_ms):
                         normalized = None
+                    else:
+                        recent_pointer_down = {
+                            "pointer": normalized["pointer"],
+                            "pos": normalized["pos"],
+                            "time_ms": now_ms,
+                        }
 
                 if event.type == pygame.QUIT:
                     running = False
